@@ -1,0 +1,93 @@
+# =========================
+# System Model
+# =========================
+system:
+  # topology
+  num_users: 20
+  num_bs: 3
+  area_size: 100
+  
+  # bs layout
+  bs_layout: "triangle"
+  coverage_radius: 35
+  spacing_scale: 1.2
+
+  # power / activation
+  max_tx_power_dbm: 20
+  power_budget_ratio: 0.6
+  bs_top_k: 5
+
+  # window-based constraints
+  on_window: 100
+  hard_window_len: 1000
+  bs_over_penalty: 50.0
+
+  
+# =========================
+# Channel / PHY Model
+# =========================
+channel:
+  bandwidth_hz: 500e6
+  carrier_frequency_hz: 28e9
+  
+  # noise
+  noise_floor_dbmhz: -174
+  noise_figure_db: 5
+
+  # pathloss / fading
+  pathloss_model: "3gpp_umi_nlos"
+  fading_model: "rayleigh"
+  pathloss_exponent: 3.5
+  fading_std_db: 4.0
+  shadowing_std_db: 3.46
+  reference_distance_m: 5.0
+
+  # mobility / variation
+  enable_mobility: true
+  enable_channel_variation: true
+  mobility_speed: 1.0
+
+# =========================
+# Lyapunov / DPP Params
+# =========================
+lyapunov:
+  V: 20.0
+  queue_floor: 1e-12
+  power_floor: 1e-12
+
+# =========================
+# Training(MARL) Params
+# =========================
+training:
+  # general
+  seed: 42
+  device: "cuda" # "cpu" or "auto"
+  total_steps: 100000
+  update_interval: 128
+  log_interval: 100
+
+  # PPO / MAPPO core
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  use_gae: true
+
+  entropy_coef_ue: 0.05
+  entropy_coef_bs: 0.05
+  value_loss_coef_ue: 0.5
+  value_loss_coef_bs: 0.5
+
+  max_grad_norm: 0.5
+  n_epochs: 4
+  miniibatch_size: 256
+  
+  # optimizer
+  lr_actor_ue: 3e-4
+  lr_actor_bs: 3e-4
+  lr_critic_ue: 1e-3
+  lr_critic_bs: 1e-3
+  
+  # network
+  ue_actor_hidden_dim: 128
+  bs_actor_hidden_dim: 128
+  critic_hidden_dim: 256
