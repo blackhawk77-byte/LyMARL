@@ -1,4 +1,4 @@
-# LyMARL:  Lyapunov-Guided Multi-Agent Reinforcement Learning Framework for Energy-Aware Radio Resource Management
+# LyMARL: Lyapunov-Guided Multi-Agent Reinforcement Learning Framework for Energy-Aware Radio Resource Management
 
 This repository provides an implementation of **LyMARL**, a Lyapunov-guided multi-agent reinforcement learning framework for **joint user association (UA) and base-station (BS) activation** in multi-cell wireless networks under **finite-horizon energy constraints**.
 
@@ -15,12 +15,12 @@ We consider a multi-cell wireless network consisting of:
 - **B base stations (BSs)** and
 - **U user equipments (UEs)**
 
-operating over a **finite time horizon** of \(T\) time slots.
+operating over a **finite time horizon** of $T$ time slots.
 
 ### Network Operation
 - Each BS can serve **at most one user per slot**, and only when it is **active (ON)**.
 - Each UE can be associated with **at most one BS per slot**.
-- BS activation incurs a fixed transmit power cost \(P_{\max}\).
+- BS activation incurs a fixed transmit power cost $P_{\max}$.
 
 ### Channel Model
 - Downlink transmission with:
@@ -35,10 +35,10 @@ operating over a **finite time horizon** of \(T\) time slots.
 
 ### Energy Constraint
 Each BS is subject to a **finite-horizon energy budget**:
-\[
-\sum_{t=1}^{T} y_b(t) P_{\max} \le P^{\text{total}}_b
-\]
-where \(y_b(t)\in\{0,1\}\) denotes BS activation.
+```math
+\sum_{t=1}^{T} y_b(t) P_{\max} \le P^{\text{total}}_b,
+\quad y_b(t) \in \{0,1\}
+```
 
 This finite-time constraint introduces a fundamental tradeoff:
 - activating more BSs improves throughput and fairness,
@@ -54,20 +54,18 @@ This repository includes a **pure Lyapunov-based baseline**, referred to as **DD
 DDPP solves the UA and BS activation problem using **Lyapunov stochastic optimization**, without any learning.
 
 ### Virtual Queues
-- **User fairness queue** \(Q_u(t)\): enforces long-term rate fairness.
-- **BS power queue** \(Z_b(t)\): regulates average BS power consumption.
+- **User fairness queue** $Q_u(t)$: enforces long-term rate fairness.
+- **BS power queue** $Z_b(t)$: regulates average BS power consumption.
 
 Queue updates follow:
-\[
+```math
 Q_u(t+1) = [Q_u(t) + \gamma_u(t) - r_u(t)]^+
-\]
-\[
 Z_b(t+1) = [Z_b(t) + y_b(t)P_{\max} - P^{\text{avg}}_b]^+
-\]
+```
 
 ### Slot-wise Control
 At each slot, DDPP:
-1. Updates auxiliary rate variables \(\gamma_u(t)\),
+1. Updates auxiliary rate variables $\gamma_u(t)$,
 2. Computes weighted user–BS scores,
 3. Performs greedy distributed matching:
    - UEs request BSs with positive surplus,
@@ -102,7 +100,7 @@ Instead of passive Lyapunov control, LyMARL introduces:
 #### User Agents
 - Generate association requests.
 - Observe:
-  - fairness backlog \(Q_u(t)\),
+  - fairness backlog $Q_u(t)$,
   - predicted achievable rates,
   - BS energy and load indicators.
 - Share a **team reward** promoting throughput and fairness.
@@ -110,7 +108,7 @@ Instead of passive Lyapunov control, LyMARL introduces:
 #### BS Agents
 - Decide whether to activate and which user to schedule.
 - Observe:
-  - power queue \(Z_b(t)\),
+  - power queue $Z_b(t)$,
   - activation history,
   - top-K requesting users.
 - Receive **per-BS rewards** balancing:
