@@ -59,8 +59,7 @@ DDPP solves the UA and BS activation problem using **Lyapunov stochastic optimiz
 
 Queue updates follow:
 ```math
-Q_u(t+1) = [Q_u(t) + \gamma_u(t) - r_u(t)]^+
-
+Q_u(t+1) = [Q_u(t) + \gamma_u(t) - r_u(t)]^+ \\
 Z_b(t+1) = [Z_b(t) + y_b(t)P_{\max} - P^{\text{avg}}_b]^+
 ```
 
