@@ -1,5 +1,4 @@
-# LyMARL  
-**Lyapunov-Guided Multi-Agent Reinforcement Learning for Energy-Constrained User Association**
+# LyMARL:  Lyapunov-Guided Multi-Agent Reinforcement Learning Framework for Energy-Aware Radio Resource Management
 
 This repository provides an implementation of **LyMARL**, a Lyapunov-guided multi-agent reinforcement learning framework for **joint user association (UA) and base-station (BS) activation** in multi-cell wireless networks under **finite-horizon energy constraints**.
 
