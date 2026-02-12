@@ -35,6 +35,7 @@ operating over a **finite time horizon** of $T$ time slots.
 
 ### Energy Constraint
 Each BS is subject to a **finite-horizon energy budget**:
+
 $$
 \sum_{t=1}^{T} y_b(t) P_{\max} \le P^{\text{total}}_b,
 \quad y_b(t) \in \{0,1\}
@@ -58,9 +59,11 @@ DDPP solves the UA and BS activation problem using **Lyapunov stochastic optimiz
 - **BS power queue** $Z_b(t)$: regulates average BS power consumption.
 
 Queue updates follow:
+
 $$
 Q_u(t+1) = [Q_u(t) + \gamma_u(t) - r_u(t)]^+ 
 $$
+
 $$
 Z_b(t+1) = [Z_b(t) + y_b(t)P_{\max} - P^{\text{avg}}_b]^+
 $$
