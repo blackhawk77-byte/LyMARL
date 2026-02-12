@@ -1,10 +1,11 @@
-# 1. QMIX Architecture
+# QMIX Architecture
 
 QMIX decomposes the joint action-value function into per-agent action-value functions while enforcing a monotonicity constraint:
 
 $$
 Q_{tot}(s, \mathbf{u}) = f(Q_1(o_1, u_1), ..., Q_n(o_n, u_n); s)
 $$
+
 where:
 
 - $Q_i(o_i, u_i)$ is the local action-value of agent $i$
@@ -18,11 +19,13 @@ The loss is defined as:
 $$
 L_{QMIX} = \mathbb{E}\left[(y^{tot} - Q_{tot})^2\right]
 $$
+
 $$
 y^{tot} = r + \gamma \max_{\mathbf{u}'} Q_{tot}(s', \mathbf{u}')
 $$
 
 ---
+
 ## 2. Agent Network
 Each agent is modeled as a Deep Recurrent Q-Network (DRQN):
 
@@ -43,11 +46,13 @@ Q_i(o_i, u_i) = W_q h_t
 $$
 
 This allows each agent to maintain an internal memory state for partially observable environments.
+
 ---
 
 ## 3. Mixing Network
 
 The mixing network combines individual Q-values into a global joint Q-value:
+
 $$
 Q_{tot} = f(Q_1, ..., Q_n; s)
 $$
@@ -57,6 +62,7 @@ It is implemented as a two-layer feedforward network whose weights are generated
 ### Hypernetworks
 
 The mixing weights are generated as:
+
 $$
 W_1(s) = |\text{MLP}_1(s)|
 $$
@@ -66,18 +72,17 @@ W_2(s) = |\text{MLP}_2(s)|
 $$
 
 Absolute value ensures:
+
 $$
 \frac{\partial Q_{tot}}{\partial Q_i} \ge 0
 $$
 
 $$
-\arg\max_{\mathbf{u}} Q_{tot}
-=
-\left(
-\arg\max_{u_1} Q_1, ..., \arg\max_{u_n} Q_n
-\right)
+\arg\max_{\mathbf{u}} Q_{tot} = \left(\arg\max_{u_1} Q_1, ..., \arg\max_{u_n} Q_n\right)
 $$
+
 which enforces the monotonicity constraint required by QMIX.
+
 ---
 
 ## 4. Limitations
