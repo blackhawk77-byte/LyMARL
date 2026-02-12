@@ -26,7 +26,7 @@ $$
 
 ---
 
-## 2. Agent Network
+## Agent Network
 Each agent is modeled as a Deep Recurrent Q-Network (DRQN):
 
 ### Architecture
@@ -49,7 +49,7 @@ This allows each agent to maintain an internal memory state for partially observ
 
 ---
 
-## 3. Mixing Network
+## Mixing Network
 
 The mixing network combines individual Q-values into a global joint Q-value:
 
@@ -85,7 +85,7 @@ which enforces the monotonicity constraint required by QMIX.
 
 ---
 
-## 4. Limitations
+## Limitations
 
 Due to the monotonic constraint, QMIX cannot represent non-monotonic joint value functions.  
 In environments with strong interaction effects (e.g., interference coupling), performance may degrade compared to policy-gradient methods (e.g., MAPPO).
