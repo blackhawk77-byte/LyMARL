@@ -11,7 +11,9 @@ Stored per episode:
     - next_state_seq: (T, state_dim)
     - done_seq:       (T, N)
     - r_indiv_seq:    (T, N)        # optional (for Option-A individual TD loss)
-
+    - mask_seq:       (T, N, A)        # optional (for variable action spaces)
+    - next_mask_seq:  (T, N, A)        # optional (for variable action spaces)
+    
 Where:
     T        = episode length
     N        = number of agents
@@ -26,6 +28,8 @@ During training, sample(B, L) returns:
     - next_state: (B, L, state_dim)
     - done:       (B, L, N)
     - r_ind:      (B, L, N)        # if stored
+    - mask:       (B, L, N, A)     # if stored
+    - next_mask:  (B, L, N, A)     # if stored
 
 Where:
     B        = batch size
@@ -50,7 +54,9 @@ class ReplayBufferRNN:
              next_local_obs_seq: torch.Tensor,  
              next_state_seq: torch.Tensor,      
              done_seq: torch.Tensor,            
-             r_indiv_seq: torch.Tensor = None   
+             r_indiv_seq: torch.Tensor = None,
+             mask_seq: torch.Tensor = None,
+             next_mask_seq: torch.Tensor = None
             ):
         assert local_obs_seq.dim() == 3, "local_obs_seq should be (T, N, obs_dim)"
         assert state_seq.dim() == 2, "state_seq should be (T, state_dim)"
@@ -73,7 +79,9 @@ class ReplayBufferRNN:
             next_local_obs_seq.detach(),
             next_state_seq.detach(),
             done_seq.detach(),
-            None if r_indiv_seq is None else r_indiv_seq.detach()
+            None if r_indiv_seq is None else r_indiv_seq.detach(),
+            None if mask_seq is None else mask_seq.detach(),
+            None if next_mask_seq is None else next_mask_seq.detach()
         )
         
         self.buffer.append(data)
@@ -84,11 +92,12 @@ class ReplayBufferRNN:
         assert batch_size > 0, "batch_size must be positive."
         assert seq_len > 0, "seq_len must be positive."
     
-        local_batch, state_batch, action_batch, r_tot_batch, next_local_batch, next_state_batch, done_batch, r_ind_batch = [], [], [], [], [], [], [], []
+        local_batch, state_batch, action_batch, r_tot_batch, next_local_batch, next_state_batch, done_batch = [], [], [], [], [], [], []
+        r_ind_batch, mask_batch, next_mask_batch = [], [], [] 
 
         while len(state_batch) < batch_size:
             ep = random.choice(self.buffer)
-            (lo_seq, s_seq, a_seq, r_tot_seq, nlo_seq, ns_seq, d_seq, r_ind_seq) = ep
+            (lo_seq, s_seq, a_seq, r_tot_seq, nlo_seq, ns_seq, d_seq, r_ind_seq, mask_seq, next_mask_seq) = ep
 
             T = lo_seq.size(0)
             if T < seq_len:
@@ -106,6 +115,16 @@ class ReplayBufferRNN:
             done_batch.append(d_seq[start_idx:end_idx])
             if use_indiv and r_ind_seq is not None:
                 r_ind_batch.append(r_ind_seq[start_idx:end_idx])
+            else:
+                r_ind_batch.append(None)
+            if mask_seq is not None:
+                mask_batch.append(mask_seq[start_idx:end_idx])
+            else:
+                mask_batch.append(None)
+            if next_mask_seq is not None:
+                next_mask_batch.append(next_mask_seq[start_idx:end_idx])
+            else:
+                next_mask_batch.append(None)
             
         obs_tensor = torch.stack(local_batch).to(self.device)     
         s_tensor = torch.stack(state_batch).to(self.device)       
@@ -113,12 +132,20 @@ class ReplayBufferRNN:
         r_tot_tensor = torch.stack(r_tot_batch).to(self.device)    
         nobs_tensor = torch.stack(next_local_batch).to(self.device)
         ns_tensor = torch.stack(next_state_batch).to(self.device)  
-        d_tensor = torch.stack(done_batch).to(self.device)         
-        r_ind_tensor = None
-        if use_indiv and len(r_ind_batch) > 0:
-            r_ind_tensor = torch.stack(r_ind_batch).to(self.device)    
+        d_tensor = torch.stack(done_batch).to(self.device)
 
-        return obs_tensor, s_tensor, a_tensor, r_tot_tensor, nobs_tensor, ns_tensor, d_tensor, r_ind_tensor
+        def _stack_or_none(lst):
+            if len(lst) == 0:
+                return None
+            if any(x is None for x in lst):
+                return None
+            return torch.stack(lst).to(self.device)
+        
+        r_ind_tensor = _stack_or_none(r_ind_batch)
+        mask_tensor = _stack_or_none(mask_batch)
+        next_mask_tensor = _stack_or_none(next_mask_batch)
+        
+        return obs_tensor, s_tensor, a_tensor, r_tot_tensor, nobs_tensor, ns_tensor, d_tensor, r_ind_tensor, mask_tensor, next_mask_tensor
 
     def __len__(self):
         return len(self.buffer)

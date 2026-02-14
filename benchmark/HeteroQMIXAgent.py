@@ -2,11 +2,6 @@
 # Hetero Learner:
 #   - UE: QMIX (team reward = ue_team_reward)
 #   - BS: Individual TD loss (indiv reward = bs_rewards[B])
-
-1.loss_ind 수정 - target q -> td target
-2.버퍼에 ind reward 저장필요
-3.epsilon decay -> max_step, training_ep 고려해서 줄게 조정
-4.(optional) qmixAgent()파라미터 조정하면 더 좋을 듯 
 """
 
 from dataclasses import dataclass
@@ -179,6 +174,8 @@ class HeteroQMIXAgent:
             bs_actions_arr.append(a)
 
         bs_actions = {b.bs_id: bs_actions_arr[j] for j, b in enumerate(self.base_stations)}
+        return (ue_actions, ue_actions_arr, ue_obs_batch, ue_mask_batch,
+                bs_actions, bs_actions_arr, bs_obs_batch, bs_mask_batch, cand_lists)
         
     # -------------------------
     # Rollout (MAPPOTrainer-style) + store to buffers
@@ -191,6 +188,7 @@ class HeteroQMIXAgent:
 
         # BS trajectory
         bs_lo, bs_s, bs_a, bs_rindiv, bs_rtot, bs_nlo, bs_ns, bs_done = [], [], [], [], [], [], [], []
+        bs_mask, bs_next_mask = [], []
 
         ep_r_ue = 0.0
         ep_r_bs_mean = 0.0
@@ -217,30 +215,32 @@ class HeteroQMIXAgent:
 
             # ---- next obs for BS ----
             (next_ue_actions, _, _, _, _, _, _, _, _) = self.select_actions(next_local_obs, next_global_obs)
-            bs_next_obs_batch, _, _ = self.env.build_bs_decision_inputs(next_ue_actions)
+            bs_next_obs_batch, bs_next_mask_batch, _ = self.env.build_bs_decision_inputs(next_ue_actions)
 
             # done replicated
             ue_done_batch = np.full((self.N_ue,), bool(done), dtype=bool)
             bs_done_batch = np.full((self.N_bs,), bool(done), dtype=bool)
 
             # append UE
-            ue_lo.append(torch.Tensor(ue_obs_batch), dytype=torch.float32)
-            ue_s.append(torch.Tensor(global_obs), dytype=torch.float32)
-            ue_a.append(torch.Tensor(ue_actions_arr), dytype=torch.long)
-            ue_rtot.append(torch.Tensor(rew_ue), dytype=torch.float32)
-            ue_nlo.append(torch.Tensor(ue_next_obs_batch), dytype=torch.float32)
-            ue_ns.append(torch.Tensor(next_global_obs), dytype=torch.float32)
-            ue_done.append(torch.Tensor(ue_done_batch), dytype=torch.bool)
+            ue_lo.append(torch.tensor(ue_obs_batch, dtype=torch.float32, device=self.device))
+            ue_s.append(torch.tensor(global_obs, dtype=torch.float32, device=self.device))
+            ue_a.append(torch.tensor(ue_actions_arr, dtype=torch.long, device=self.device))
+            ue_rtot.append(torch.tensor(rew_ue, dtype=torch.float32, device=self.device))
+            ue_nlo.append(torch.tensor(ue_next_obs_batch, dtype=torch.float32, device=self.device))
+            ue_ns.append(torch.tensor(next_global_obs, dtype=torch.float32, device=self.device))
+            ue_done.append(torch.tensor(ue_done_batch, dtype=torch.bool, device=self.device))
 
             # append BS
-            bs_lo.append(torch.Tensor(bs_obs_batch), dytype=torch.float32)
-            bs_s.append(torch.Tensor(global_obs), dytype=torch.float32)
-            bs_a.append(torch.Tensor(bs_actions_arr), dytype=torch.long)
-            bs_rindiv.append(torch.Tensor(rew_bs_vec), dytype=torch.float32)
-            bs_rtot.append(torch.Tensor(np.sum(rew_bs_vec)), dytype=torch.float32)
-            bs_nlo.append(torch.Tensor(bs_next_obs_batch), dytype=torch.float32)
-            bs_ns.append(torch.Tensor(next_global_obs), dytype=torch.float32)
-            bs_done.append(torch.Tensor(bs_done_batch), dytype=torch.bool)
+            bs_lo.append(torch.tensor(bs_obs_batch, dtype=torch.float32, device=self.device))
+            bs_s.append(torch.tensor(global_obs, dtype=torch.float32, device=self.device))
+            bs_a.append(torch.tensor(bs_actions_arr, dtype=torch.long, device=self.device))
+            bs_rindiv.append(torch.tensor(rew_bs_vec, dtype=torch.float32, device=self.device))
+            bs_rtot.append(torch.tensor(np.sum(rew_bs_vec), dtype=torch.float32, device=self.device))
+            bs_nlo.append(torch.tensor(bs_next_obs_batch, dtype=torch.float32, device=self.device))
+            bs_ns.append(torch.tensor(next_global_obs, dtype=torch.float32, device=self.device))
+            bs_done.append(torch.tensor(bs_done_batch, dtype=torch.bool, device=self.device))
+            bs_mask.append(torch.tensor(bs_masks_batch, dtype=torch.bool, device=self.device))
+            bs_next_mask.append(torch.tensor(bs_next_mask_batch, dtype=torch.bool, device=self.device))
 
             local_obs, global_obs = next_local_obs, next_global_obs
             self.total_env_stpes += 1
@@ -270,10 +270,12 @@ class HeteroQMIXAgent:
         bs_nlo = torch.stack(bs_nlo, dim=0)
         bs_ns = torch.stack(bs_ns, dim=0)
         bs_done = torch.stack(bs_done, dim=0)
+        bs_mask = torch.stack(bs_mask, dim=0)
+        bs_next_mask = torch.stack(bs_next_mask, dim=0)
 
         # store to buffers
-        self.buf_ue.push(ue_lo, ue_s, ue_a, ue_rtot, ue_nlo, ue_ns, ue_done, None)
-        self.buf_bs.push(bs_lo, bs_s, bs_a, bs_rtot, bs_nlo, bs_ns, bs_done, bs_rindiv)
+        self.buf_ue.push(ue_lo, ue_s, ue_a, ue_rtot, ue_nlo, ue_ns, ue_done, None, None, None)
+        self.buf_bs.push(bs_lo, bs_s, bs_a, bs_rtot, bs_nlo, bs_ns, bs_done, bs_rindiv, bs_mask, bs_next_mask)
         
         return {"ep_len": float(T),
                 "ep_r_ue_sum": float(ep_r_ue),
@@ -285,7 +287,7 @@ class HeteroQMIXAgent:
     # UE QMIX loss (team reward)
     # -------------------------                                                                                    
     def _loss_ue_qmix(self, batch) -> torch.Tensor:
-        obs, state, action, r_tot, next_obs, next_state, done, _ = batch
+        obs, state, action, r_tot, next_obs, next_state, done, _, _, _= batch
         B, L, N, _ = obs.shape
         assert N == self.N_ue
 
@@ -321,7 +323,7 @@ class HeteroQMIXAgent:
                     next_a = q_next_online.argmax(dim=-1, keepdim=True)         # (B, 1)
 
                     q_next_tgt, h_tgt = self.ue_tgt(next_obs_t, a_curr_1hot, h_tgt)  # (B, A), (B, hidden_dim)
-                    tq = q_next_tgt.gather(-1, next_a.unsqueeze(-1)).squeeze(-1)  # (B, )
+                    tq = q_next_tgt.gather(-1, next_a).squeeze(-1)  # (B, )
                     tq_seq.append(tq.unsqueeze(1))  # (B, 1)
                 
             agent_qs.append(torch.cat(q_seq, dim =1))       # (B, L)
@@ -345,12 +347,13 @@ class HeteroQMIXAgent:
     # BS individual TD loss (indiv reward)
     # -------------------------
     def _loss_bs_indiv(self, batch) -> torch.Tensor:
-        obs, state, action, r_tot, next_obs, next_state, done, r_indiv = batch
+        obs, state, action, r_tot, next_obs, next_state, done, r_indiv, mask, next_mask = batch
 
         assert r_indiv is not None, "BS buffer must store individual rewards for indiv TD loss"
         B, L, Nb, _ = obs.shape
         assert Nb == self.N_bs
         assert r_indiv.shape == (B, L, Nb)
+        assert next_mask is not None, "BS buffer must store next action mask for indiv TD loss"
 
         losses=[]
         for j in range(Nb):
@@ -380,11 +383,15 @@ class HeteroQMIXAgent:
                 with torch.no_grad():
                     next_obs_t = ns_j[:, t]  # (B, obs_dim)
                     a_curr_1hot = one_hot(act_t, self.bs_act_dim)  # (B, A)
+                    next_mask_t = next_mask[:, t, j, :]  # (B, A)
+
                     q_next_online, _ = self.bs_net(next_obs_t, a_curr_1hot, h.detach())  # (B, A), (B, hidden_dim)
-                    next_a = q_next_online.argmax(dim=-1, keepdim=True)         # (B, 1)
+                    q_next_online = apply_mask_q(q_next_online, next_mask_t)  # (B, A)
+                    next_a = q_next_online.argmax(dim=-1, keepdim=True)       # (B, 1)
 
                     q_next_tgt, h_tgt = self.bs_tgt(next_obs_t, a_curr_1hot, h_tgt)  # (B, A), (B, hidden_dim)
-                    tq = q_next_tgt.gather(-1, next_a.unsqueeze(-1)).squeeze(-1)  # (B, )
+                    q_next_tgt = apply_mask_q(q_next_tgt, next_mask_t)  # (B, A)
+                    tq = q_next_tgt.gather(-1, next_a).squeeze(-1)  # (B, )
                     tq_seq.append(tq)  # (B, 1)
 
             agent_q_seq = torch.stack(q_sel_seq,dim=1)    # (B,L)
