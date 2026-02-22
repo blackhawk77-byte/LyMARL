@@ -81,19 +81,26 @@ class MixingNetwork(nn.Module):
         w1 = self.hyper_w1(state).view(-1, self.n_agents, self.hidden_dim)  # W1 = [B, n_agents, hidden_dim]
         b1 = self.hyper_b1(state).view(-1, 1, self.hidden_dim)              # b1 = [B, 1, hidden_dim]
         
-        hidden = F.elu(torch.bmm(agents_q.unsqueeze(1), w1) + b1).squeeze(1)             
-        # hidden = [B, 1, n_agents] * [B, n_agents, hidden_dim] + [B, 1, hidden_dim] -> squeeze [B, hidden_dim]
+        hidden = F.elu(torch.bmm(agents_q.unsqueeze(1), w1) + b1).squeeze(1)   # hidden = [B, 1, n_agents] * [B, n_agents, hidden_dim] + [B, 1, hidden_dim] -> squeeze [B, hidden_dim]
         
         w2 = self.hyper_w2(state).view(-1, self.hidden_dim, 1)              # W2 = [B, hidden_dim, 1]
         b2 = self.hyper_b2(state)                                           # b2 = [B, 1] -> [B, 1]
 
-        q_total = torch.bmm(hidden.unsqueeze(1), w2).squeeze(1) + b2
-        # q_total = [B, 1, hidden_dim] * [B, hidden_dim, 1] + [B, 1]
-        q_total = q_total.squeeze(-1) # (B,)
-
         w_ind = self.hyper_w_ind(state).view(-1, self.hidden_dim, self.n_agents)
         b_ind = self.hyper_b_ind(state)
 
-        q_ind = torch.bmm(hidden.unsqueeze(1), w_ind).squeeze(1) + b_ind
-        # q_ind = [B, 1, hidden_dim] * [B, hidden_dim, n_agents] + [B, n_agents]
+        q_total = torch.bmm(hidden.unsqueeze(1), w2).squeeze(1) + b2        # q_total = [B, 1, hidden_dim] * [B, hidden_dim, 1] + [B, 1]
+        q_total = q_total.squeeze(-1) # (B,)
+
+        q_ind_list = []
+        for i in range(self.n_agents):
+            aq = agents_q.clone()     # (B, N)
+            mask = torch.ones(self.n_agents, dtype=torch.bool, device=aq.device)
+            mask[i] = False           # i번째 agent만 False, 나머지는 True
+            aq[:, mask] = aq[:, mask].detach()      # (B, N)에서 i번째 agent의 q값만 gradient 흐르게 하고 나머지는 상수 취급
+            hidden_i = F.elu(torch.bmm(aq.unsqueeze(1), w1) + b1).squeeze(1)    # hidden_i = [B, 1, n_agents] * [B, n_agents, hidden_dim] + [B, 1, hidden_dim] -> squeeze [B, hidden_dim]
+            qi = (hidden_i * w_ind[:, :, i]).sum(dim=-1) + b_ind[:, i]          # qi = [B, hidden_dim] * [B, hidden_dim] + [B, 1] -> (B,)
+            q_ind_list.append(qi.unsqueeze(-1))     # (B, 1)
+        q_ind = torch.cat(q_ind_list, dim=-1)       # (B, N)
+
         return q_total , q_ind 

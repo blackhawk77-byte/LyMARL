@@ -243,6 +243,9 @@ def run_train(args):
     )
     print()
     logs = agent.train(n_env_steps=args.n_env_steps, rollout_horizon=args.rollout_horizon)
+    if args.save_ckpt:
+        agent.save(args.ckpt_path)
+        print(f"[checkpoint] saved to: {args.ckpt_path}")
     rollouts = [x for x in logs if x.get("type") == "rollout"]
     updates = [x for x in logs if x.get("type") == "update"]
     if rollouts:
@@ -293,15 +296,32 @@ def run_eval(args):
         eps_decay=1.0,
     )
     agent = HeteroQMIXAgent(env=env, cfg=cfg, log_dir="./results/eval_logs", device=args.device)
+    
+    if args.load_ckpt:
+        if not os.path.exists(args.ckpt_path):
+            raise FileNotFoundError(f"checkpoint not found: {args.ckpt_path}")
+        agent.load(args.ckpt_path, load_optimizer=False)
+        print(f"[EVAL] loaded {args.ckpt_path}")
+    
     agent.eps = args.eval_epsilon
-
+    logs = []
     print(f"\n[EVAL] episodes={args.episodes} | horizon={args.rollout_horizon} | epsilon={args.eval_epsilon}\n")
+
     for ep_i in range(args.episodes):
         out = agent.rollout_episode(n_steps=args.rollout_horizon)
+        log = {
+            "type": "eval",
+            "episode": ep_i,
+            **out
+        }
+        logs.append(log)
         print(
             f"  ep={ep_i:03d} | len={out['ep_len']:.0f} | r_ue_sum={out['ep_r_ue_sum']:.3f} "
             f"| r_bs_sum={out['ep_r_bs_sum']:.3f} | epsilon={out['epsilon']:.3f}"
         )
+    save_logs_csv(logs, path="./results/eval_logs/eval_log.csv")
+    plot_train_metrics(logs, agent, save_dir="./results/eval_plots", window=100)
+    
 
 def main():
     parser = argparse.ArgumentParser()
@@ -336,6 +356,10 @@ def main():
     parser.add_argument("--eps_end", type=float, default=0.05)
     parser.add_argument("--eps_decay", type=float, default=0.9995)
 
+    parser.add_argument("--ckpt_path", type=str, default="./checkpoints/heteroqmix_queue.pt")
+    parser.add_argument("--save_ckpt", action="store_true", default=True)
+    parser.add_argument("--load_ckpt", action="store_true", default=False)  
+    parser.add_argument("--no_load_optimizer", action="store_true", default=False)
     # eval
     parser.add_argument("--episodes", type=int, default=5)
     parser.add_argument("--eval_epsilon", type=float, default=0.05)

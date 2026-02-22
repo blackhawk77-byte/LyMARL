@@ -13,6 +13,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
 import random
+import os
 
 from benchmark.qmix import AgentNetwork, MixingNetwork
 from benchmark.replaybuffer import ReplayBufferRNN
@@ -143,6 +144,7 @@ class HeteroQMIXAgent:
 
         self.ue_vnorm = ValueNorm(eps=1e-5, device=self.device)
         self.bs_vnorm = ValueNorm(eps=1e-5, device=self.device)
+        self.bs_vnorm_vec = ValueNormVec(self.N_bs, eps=1e-5, device=self.device)
     
     def _decay_eps(self):
         self.eps = max(self.cfg.eps_end, self.eps * self.cfg.eps_decay)
@@ -258,11 +260,12 @@ class HeteroQMIXAgent:
         ue_mask, ue_next_mask = [], []
 
         # BS trajectory
-        bs_lo, bs_s, bs_a, bs_rtot, bs_nlo, bs_ns, bs_done = [], [], [], [], [], [], []
+        bs_lo, bs_s, bs_a, bs_rtot, bs_rindiv, bs_nlo, bs_ns, bs_done = [], [], [], [], [], [], [], []
         bs_mask, bs_next_mask = [], []
 
         ep_r_ue = 0.0
-        ep_r_bs = 0.0 # ep_r_bs_mean 
+        ep_r_bs = 0.0 
+        ep_r_bs_mean = 0.0
         done_flag = False
 
         for _ in range(n_steps):
@@ -326,11 +329,11 @@ class HeteroQMIXAgent:
             #     idx = int(ue_id) - 1
             #     if 0 <= idx < self.N_ue:
             #         rew_ue_ind[idx] = float(r)
-            # rew_bs_vec = np.asarray(info["bs_rewards"], dtype=np.float32)  # (N_bs, )
-            # assert rew_bs_vec.shape[0] == self.N_bs
+            rew_bs_vec = np.asarray(info["bs_rewards"], dtype=np.float32)  # (N_bs, )
+            assert rew_bs_vec.shape[0] == self.N_bs
             ep_r_ue += rew_ue
             ep_r_bs += rew_bs
-            # ep_r_bs_mean += float(np.mean(rew_bs_vec))
+            ep_r_bs_mean += float(np.mean(rew_bs_vec))
 
             # ---- next obs for UE ----
             ue_next_obs_batch = np.stack([next_local_obs[u.ue_id] for u in self.users], axis=0).astype(np.float32)  # (N_ue, obs_dim)
@@ -359,7 +362,7 @@ class HeteroQMIXAgent:
             bs_lo.append(torch.tensor(bs_obs_batch, dtype=torch.float32, device="cpu"))
             bs_s.append(torch.tensor(global_obs, dtype=torch.float32, device="cpu"))
             bs_a.append(torch.tensor(bs_actions_arr, dtype=torch.long, device="cpu"))
-            # bs_rindiv.append(torch.tensor(rew_bs_vec, dtype=torch.float32, device="cpu"))
+            bs_rindiv.append(torch.tensor(rew_bs_vec, dtype=torch.float32, device="cpu"))
             bs_rtot.append(torch.tensor(rew_bs, dtype=torch.float32, device="cpu"))
             bs_nlo.append(torch.tensor(bs_next_obs_batch, dtype=torch.float32, device="cpu"))
             bs_ns.append(torch.tensor(next_global_obs, dtype=torch.float32, device="cpu"))
@@ -377,15 +380,15 @@ class HeteroQMIXAgent:
             Z_b = info.get("Z_b", None)
             if (self.total_env_steps % 50) == 0:
                 no_req_idx = int(getattr(self.env, "no_request_action", self.ue_act_dim - 1))
-                # no_req_ratio = sum(int(a)==no_req_idx for a in ue_actions_arr) / max(1, self.N_ue)
-                # print("thr:", info.get("total_throughput", 0.0),
-                #       "| no_req_ratio:", round(no_req_ratio, 3),
-                #       "| bs_mask_true_mean:", float(np.mean(bs_masks_batch.sum(axis=1))),
-                #       "| bs_mask_true_min:", int(bs_masks_batch.sum(axis=1).min()),
-                #       "| cand_mean:", float(np.mean([len(c) for c in cand_lists])),
-                #       "| cand_min:", int(min(len(c) for c in cand_lists)),
-                #       "| mean_Q:", float(np.mean(list(Q_u.values()))) if isinstance(Q_u, dict) and len(Q_u) > 0 else 0.0,
-                #       "| mean_Z:", float(np.mean(list(Z_b.values()))) if isinstance(Z_b, dict) and len(Z_b) > 0 else 0.0,)
+                no_req_ratio = sum(int(a)==no_req_idx for a in ue_actions_arr) / max(1, self.N_ue)
+                print("thr:", info.get("total_throughput", 0.0),
+                      "| no_req_ratio:", round(no_req_ratio, 3),
+                      "| bs_mask_true_mean:", float(np.mean(bs_masks_batch.sum(axis=1))),
+                      "| bs_mask_true_min:", int(bs_masks_batch.sum(axis=1).min()),
+                      "| cand_mean:", float(np.mean([len(c) for c in cand_lists])),
+                      "| cand_min:", int(min(len(c) for c in cand_lists)),
+                      "| mean_Q:", float(np.mean(list(Q_u.values()))) if isinstance(Q_u, dict) and len(Q_u) > 0 else 0.0,
+                      "| mean_Z:", float(np.mean(list(Z_b.values()))) if isinstance(Z_b, dict) and len(Z_b) > 0 else 0.0,)
             self._decay_eps()
 
             if done:
@@ -411,7 +414,7 @@ class HeteroQMIXAgent:
         bs_lo = torch.stack(bs_lo, dim=0)
         bs_s = torch.stack(bs_s, dim=0)
         bs_a = torch.stack(bs_a, dim=0)
-        # bs_rindiv = torch.stack(bs_rindiv, dim=0)
+        bs_rindiv = torch.stack(bs_rindiv, dim=0)
         bs_rtot = torch.stack(bs_rtot, dim=0)
         bs_nlo = torch.stack(bs_nlo, dim=0)
         bs_ns = torch.stack(bs_ns, dim=0)
@@ -422,7 +425,7 @@ class HeteroQMIXAgent:
         # store to buffers
         if T>= self.cfg.seq_len:
             self.buf_ue.push(ue_lo, ue_s, ue_a, ue_rtot, ue_nlo, ue_ns, ue_done, None, ue_mask, ue_next_mask)
-            self.buf_bs.push(bs_lo, bs_s, bs_a, bs_rtot, bs_nlo, bs_ns, bs_done, None, bs_mask, bs_next_mask)
+            self.buf_bs.push(bs_lo, bs_s, bs_a, bs_rtot, bs_nlo, bs_ns, bs_done, bs_rindiv, bs_mask, bs_next_mask)
         
         self._cur_local_obs, self._cur_global_obs = local_obs, global_obs
 
@@ -434,7 +437,7 @@ class HeteroQMIXAgent:
         fair_ep = self.jain_fairness(served_sum_per_ue) if served_sum_per_ue is not None else float("nan")
         fair_mean_step = float(np.mean(fair_list)) if len(fair_list) > 0 else float("nan")
         on_ratio_mean_ep = float(np.nanmean(on_ratio_mean_list)) if len(on_ratio_mean_list) else float("nan")
-        # ep_r_bs_mean = ep_r_bs / max(1, T)
+        ep_r_bs_mean = ep_r_bs / max(1, T)
 
         return {"ep_len": float(T),
                 "thr_sum": float(thr_sum),
@@ -445,6 +448,7 @@ class HeteroQMIXAgent:
                 "on_ratio_mean": on_ratio_mean_ep,
                 "ep_r_ue_sum": float(ep_r_ue),
                 "ep_r_bs_sum": float(ep_r_bs),
+                "ep_r_bs_mean": float(ep_r_bs_mean),
                 "epsilon": float(self.eps),
             }  
     
@@ -542,10 +546,10 @@ class HeteroQMIXAgent:
     def _loss_bs_qmix(self, batch, *, update_vnorm: bool=True) -> torch.Tensor:
         obs, state, action, r_tot, next_obs, next_state, done, r_indiv, mask, next_mask = batch
 
-        #assert r_indiv is not None, "BS buffer must store individual rewards for indiv TD loss"
+        assert r_indiv is not None, "BS buffer must store individual rewards for indiv TD loss"
         B, L, Nb, _ = obs.shape
         assert Nb == self.N_bs
-        # assert r_indiv.shape == (B, L, Nb)
+        assert r_indiv.shape == (B, L, Nb)
         assert next_mask is not None, "BS buffer must store next action mask for indiv TD loss"
 
         agent_qs, target_qs =[], []
@@ -605,29 +609,29 @@ class HeteroQMIXAgent:
             q_tot_t, q_ind_t = self.bs_mix(agent_qs[:,t],state[:,t])
             tq_tot_t, tq_ind_t = self.bs_mix_tgt(target_qs[:,t], next_state[:,t])
 
-            q_tot_list.append(q_tot_t)
-            tq_tot_list.append(tq_tot_t)
-            #q_ind_list.append(q_ind_t)
-            #tq_ind_list.append(tq_ind_t)
+            # q_tot_list.append(q_tot_t)
+            # tq_tot_list.append(tq_tot_t)
+            q_ind_list.append(q_ind_t)
+            tq_ind_list.append(tq_ind_t)
         
-        q_tot = torch.stack(q_tot_list, dim=1)      # (B, L)
-        tq_tot = torch.stack(tq_tot_list, dim=1)    # (B, L)
-        #q_ind = torch.stack(q_ind_list, dim=1)      # (B, L, Nb)
-        #tq_ind = torch.stack(tq_ind_list, dim=1)    # (B, L, Nb)
+        # q_tot = torch.stack(q_tot_list, dim=1)      # (B, L)
+        # tq_tot = torch.stack(tq_tot_list, dim=1)    # (B, L)
+        q_ind = torch.stack(q_ind_list, dim=1)      # (B, L, Nb)
+        tq_ind = torch.stack(tq_ind_list, dim=1)    # (B, L, Nb)
 
         done_any = done[:, :, 0].float()            # (B, L)
 
-        y_tot = r_tot + self.cfg.gamma * (1.0-done_any) * tq_tot
-        #y_ind = r_indiv + self.cfg.gamma * (1.0-done_any).unsqueeze(-1) * tq_ind
+        # y_tot = r_tot + self.cfg.gamma * (1.0-done_any) * tq_tot
+        y_ind = r_indiv + self.cfg.gamma * (1.0-done_any).unsqueeze(-1) * tq_ind
         if update_vnorm:
             with torch.no_grad():
-                self.bs_vnorm.update(y_tot)
-        y_tot_n = self.bs_vnorm.normalize(y_tot)
+                self.bs_vnorm_vec.update(y_ind)
+        y_ind_n = self.bs_vnorm_vec.normalize(y_ind)
 
-        loss_tot = F.smooth_l1_loss(q_tot, y_tot_n.detach())
-        #loss_ind = F.smooth_l1_loss(q_ind, y_ind_n.detach())
+        # loss_tot = F.smooth_l1_loss(q_tot, y_tot_n.detach())
+        loss_ind = F.smooth_l1_loss(q_ind, y_ind_n.detach())
 
-        return loss_tot #loss_tot + float(self.cfg.beta_bs_ind) * loss_ind
+        return loss_ind #loss_tot + float(self.cfg.beta_bs_ind) * loss_ind
     
     # -------------------------
     # Update
@@ -637,7 +641,7 @@ class HeteroQMIXAgent:
             return {}
         
         batch_ue = self.buf_ue.sample(self.cfg.batch_size, self.cfg.seq_len, use_indiv=False)
-        batch_bs = self.buf_bs.sample(self.cfg.batch_size, self.cfg.seq_len, use_indiv=False)
+        batch_bs = self.buf_bs.sample(self.cfg.batch_size, self.cfg.seq_len, use_indiv=True)
     
         loss_ue = self._loss_ue_qmix(batch_ue, update_vnorm=True)
         self.opt_ue.zero_grad()
@@ -662,8 +666,8 @@ class HeteroQMIXAgent:
                 "epsilon": float(self.eps),
                 "ue_v_mean": float(self.ue_vnorm.mean.item()),
                 "ue_v_std": float(self.ue_vnorm.std().item()),
-                "bs_v_mean": float(self.bs_vnorm.mean.item()),
-                "bs_v_std": float(self.bs_vnorm.std().item()),
+                "bs_v_mean": float(self.bs_vnorm_vec.mean.mean().item()),
+                "bs_v_std": float(self.bs_vnorm_vec.std().mean().item()),
             }
     
     
@@ -692,3 +696,43 @@ class HeteroQMIXAgent:
         pbar.close()
         return logs
     
+    def save(self, path: str):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+
+        checkpoint = {
+            "ue_net": self.ue_net.state_dict(),
+            "ue_tgt": self.ue_tgt.state_dict(),
+            "ue_mix": self.ue_mix.state_dict(),
+            "ue_mix_tgt": self.ue_mix_tgt.state_dict(),
+            "bs_net": self.bs_net.state_dict(),
+            "bs_tgt": self.bs_tgt.state_dict(),
+            "bs_mix": self.bs_mix.state_dict(),
+            "bs_mix_tgt": self.bs_mix_tgt.state_dict(),
+            "opt_ue": self.opt_ue.state_dict(),
+            "opt_bs": self.opt_bs.state_dict(),
+            "ue_vnorm": self.ue_vnorm.state_dict(),
+            "bs_vnorm_vec": self.bs_vnorm_vec.state_dict(),
+            "eps": self.eps,
+            "total_env_steps": self.total_env_steps,
+            "cfg": self.cfg,
+        }
+        torch.save(checkpoint, path)
+        print(f"[SAVE] Model saved to {path}")
+
+    def load(self, path: str):
+        checkpoint = torch.load(path, map_location=self.device)
+        self.ue_net.load_state_dict(checkpoint["ue_net"])
+        self.ue_tgt.load_state_dict(checkpoint["ue_tgt"])
+        self.ue_mix.load_state_dict(checkpoint["ue_mix"])
+        self.ue_mix_tgt.load_state_dict(checkpoint["ue_mix_tgt"])
+        self.bs_net.load_state_dict(checkpoint["bs_net"])
+        self.bs_tgt.load_state_dict(checkpoint["bs_tgt"])
+        self.bs_mix.load_state_dict(checkpoint["bs_mix"])
+        self.bs_mix_tgt.load_state_dict(checkpoint["bs_mix_tgt"])
+        self.opt_ue.load_state_dict(checkpoint["opt_ue"])
+        self.opt_bs.load_state_dict(checkpoint["opt_bs"])
+        self.ue_vnorm.load_state_dict(checkpoint["ue_vnorm"])
+        self.bs_vnorm_vec.load_state_dict(checkpoint["bs_vnorm_vec"])
+        self.eps = checkpoint.get("eps", self.cfg.eps_start)
+        self.total_env_steps = checkpoint.get("total_env_steps", 0)
+        print(f"[LOAD] Model loaded from {path}")
