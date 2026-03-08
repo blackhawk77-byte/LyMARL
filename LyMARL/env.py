@@ -526,10 +526,10 @@ class MAPPOEnvironment:
             budget = self.P_bar[bs.bs_id]
             self.Z_b[bs.bs_id] = max(0.001, self.Z_b[bs.bs_id] + (power - budget))
 
-        # UE Reward
+        # UE Reward 
         eta = 1.0
         mean_Q = float(np.mean([self.Q_u[u.ue_id] for u in self.users]))
-        ue_team_reward = float(total_rate / max(1, self.n_agents) - eta * mean_Q)
+        ue_team_reward = float(total_rate / max(1, self.n_agents) - eta * mean_Q) 
 
         # BS reward
         on_feats = self._get_bs_on_features()
@@ -552,6 +552,37 @@ class MAPPOEnvironment:
 
         bs_rewards = np.array(bs_rewards, dtype=np.float32)
         bs_team_reward = float(np.mean(bs_rewards))
+
+        # # =========================
+        # # DEBUG: 독주/폭주 확인용 로그
+        # # =========================
+        # if (self.timestep % 50) == 0:
+        #     # 1) 현재 슬롯 on/off (즉시 ON 여부)
+        #     on_now_vec = np.array(
+        #         [1.0 if float(power_consumed[bs.bs_id]) > 0.0 else 0.0 for bs in self.base_stations],
+        #         dtype=np.float32
+        #     )
+
+        #     # 2) 최근 on_ratio (on_window 평균)
+        #     on_ratio_vec = np.array(self._get_bs_on_features(), dtype=np.float32)  # len = n_bs
+
+        #     # 3) 요청 몰림(혼잡) 지표: prev_req_ratio
+        #     req_ratio_vec = np.array(self._get_bs_congestion_features(), dtype=np.float32)  # len = n_bs
+
+        #     # 4) Z_b 값
+        #     Z_vec = np.array([float(self.Z_b[bs.bs_id]) for bs in self.base_stations], dtype=np.float32)
+
+        #     # 5) (옵션) 이번 슬롯 served_rate per BS
+        #     served_vec = np.array([float(bs_served_rate[bs.bs_id]) for bs in self.base_stations], dtype=np.float32)
+
+        #     print(
+        #         f"[t={self.timestep:06d}] "
+        #         f"on_now={on_now_vec.tolist()} | "
+        #         f"on_ratio={np.round(on_ratio_vec,3).tolist()} | "
+        #         f"req_ratio={np.round(req_ratio_vec,3).tolist()} | "
+        #         f"Z={np.round(Z_vec,3).tolist()} | "
+        #         f"served={np.round(served_vec,3).tolist()}"
+        #     )
 
         # Transition to next state
         self.timestep += 1
@@ -590,7 +621,7 @@ class MAPPOEnvironment:
             # helpful: NO-REQUEST index
             "ue_no_request_action": int(self.no_request_action),
         }
-
+        
         done = False
         return local_obs, global_obs, info, done
 
