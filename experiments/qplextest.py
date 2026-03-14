@@ -20,7 +20,7 @@ import csv
 from basestation import SmallCellBaseStation
 from user_equipment import UserEquipment
 from core import generate_triangle_coverage
-from LyMARL.env_noqueue import MAPPOEnvironment
+from LyMARL.env import MAPPOEnvironment
 from LyMARL.trainer import MAPPOTrainer
 from benchmark.qplex.HeteroQPLEXAgent import HeteroQPLEXAgent, HeteroQPLEXcfg
 
@@ -182,7 +182,7 @@ def build_env(n_ue: int, n_bs: int, bs_top_k: int, power_budget_ratio: float,
     env = MAPPOEnvironment(
         base_stations=base_stations,
         users=users,
-        # V=V,
+        V=V,
         power_budget_ratio=power_budget_ratio,
         enable_mobility=enable_mobility,
         enable_channel_variation=enable_channel_variation,
@@ -362,9 +362,9 @@ def main():
     parser.add_argument("--V", type=float, default=5.0)
     parser.add_argument("--enable_mobility", action="store_true", default=True)
     parser.add_argument("--enable_channel_variation", action="store_true", default=True)
-    parser.add_argument("--hard_window_len", type=int, default=1000)
+    parser.add_argument("--hard_window_len", type=int, default=10000)
     parser.add_argument("--on_window", type=int, default=100)
-    parser.add_argument("--bs_over_penalty", type=float, default=50.0)
+    parser.add_argument("--bs_over_penalty", type=float, default=100.0)
     
     # rollout/train
     parser.add_argument("--n_env_steps", type=int, default=50000)
@@ -386,7 +386,7 @@ def main():
     parser.add_argument("--n_heads", type=int, default=HeteroQPLEXcfg.n_heads)
 
     # ckpt
-    parser.add_argument("--ckpt_path", type=str, default="./checkpoints/heteroqplex_no_queue.pt")
+    parser.add_argument("--ckpt_path", type=str, default="./checkpoints/heteroqplex_queue.pt")
     parser.add_argument("--save_ckpt", action="store_true", default=True)
     parser.add_argument("--load_ckpt", action="store_true", default=True)  
     
