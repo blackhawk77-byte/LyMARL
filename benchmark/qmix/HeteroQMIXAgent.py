@@ -291,6 +291,8 @@ class HeteroQMIXAgent:
         ep_r_bs = 0.0 
         done_flag = False
 
+        reward_ue_hist, reward_bs_hist = [], []
+
         for _ in range(n_steps):
             (ue_actions, ue_actions_arr, ue_obs_batch, ue_masks_batch,
                 bs_actions, bs_actions_arr, bs_obs_batch, bs_masks_batch, cand_lists) = self.select_actions(local_obs, global_obs)
@@ -347,6 +349,8 @@ class HeteroQMIXAgent:
             rew_bs = float(info['bs_team_reward'])
             ep_r_ue += rew_ue
             ep_r_bs += rew_bs
+            reward_ue_hist.append(rew_ue)
+            reward_bs_hist.append(rew_bs)
 
             # ---- next obs for UE ----
             ue_next_obs_batch = np.stack([next_local_obs[u.ue_id] for u in self.users], axis=0).astype(np.float32)  # (N_ue, obs_dim)
@@ -422,7 +426,7 @@ class HeteroQMIXAgent:
 
         T = len(ue_lo)
         if T == 0:
-            return {"ep_len": 0.0, "ep_r_ue_sum": 0.0, "ep_r_bs_sum": 0.0, "epsilon": float(self.eps)}
+            return {"ep_len": 0.0, "ep_r_ue_sum": 0.0, "ep_r_bs_sum": 0.0, "epsilon": float(self.eps), "reward_ue_hist": [], "reward_bs_hist": []}
 
         # stack as (T, N, dim)
         ue_lo = torch.stack(ue_lo, dim=0)
@@ -468,6 +472,8 @@ class HeteroQMIXAgent:
                 "ep_r_ue_sum": float(ep_r_ue),
                 "ep_r_bs_sum": float(ep_r_bs),
                 "epsilon": float(self.eps),
+                "reward_ue_hist": reward_ue_hist,
+                "reward_bs_hist": reward_bs_hist,
             }  
     
     # -------------------------

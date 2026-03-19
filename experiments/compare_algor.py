@@ -5,6 +5,7 @@ import sys
 import random
 import json
 from typing import List, Tuple, Dict, Any, Optional
+import matplotlib.pyplot as plt
 
 import numpy as np
 import torch
@@ -59,6 +60,17 @@ def summarize_metric(values: List[float]) -> Dict[str, float]:
         "50%": float(np.percentile(arr, 50)) if len(arr) > 0 else 0.0,
         "75%": float(np.percentile(arr, 75)) if len(arr) > 0 else 0.0,   
         "max": float(np.max(arr)) if len(arr) > 0 else 0.0,}
+
+def moving_average(x, window = 1000):
+    x = np.asarray(x, dtype=np.float64)
+    if len(x) == 0:
+        return x
+    if window <= 1:
+        return x
+    if len(x) < window:
+        return x.copy()
+    kernel = np.ones(window, dtype=np.float64) / window
+    return np.convolve(x, kernel, mode='same')
 
 # -------------------------------------------------
 # Environment builder
@@ -136,7 +148,7 @@ def load_mappo_trainer(env, ckpt_path: str, device: str = "cuda"):
 # rollout / evaluate 리턴 키가 다를 수 있으니 후보 키를 넓게 잡음
 # -------------------------------------------------
 @torch.no_grad()
-def eval_one_ep_qmix(agent, rollout_horizon: int = 200) -> Dict[str, float]:
+def eval_one_ep_qmix(agent, rollout_horizon: int = 200) -> Dict[str, Any]:
     out = agent.rollout_episode(n_steps=rollout_horizon)
     ep_len = max(1.0, float(out["ep_len"]))
     n_bs = float(agent.env.n_bs) if hasattr(agent.env, "n_bs") else float(len(agent.env.base_stations))
@@ -147,10 +159,12 @@ def eval_one_ep_qmix(agent, rollout_horizon: int = 200) -> Dict[str, float]:
         "on_ratio": float(out["on_ratio_mean"]),
         "reward_ue": float(out["ep_r_ue_sum"]) / ep_len,
         "reward_bs": float(out["ep_r_bs_sum"]) / ep_len / n_bs,
+        "reward_ue_hist": list(out.get("reward_ue_hist", [])),
+        "reward_bs_hist": list(out.get("reward_bs_hist", [])),
     }
 
 @torch.no_grad()
-def eval_one_episode_qplex(agent, rollout_horizon: int = 200) -> Dict[str, float]:
+def eval_one_episode_qplex(agent, rollout_horizon: int = 200) -> Dict[str, Any]:
     out = agent.rollout_episode(n_steps=rollout_horizon)
     ep_len = max(1.0, float(out["ep_len"]))
     n_bs = float(agent.env.n_bs) if hasattr(agent.env, "n_bs") else float(len(agent.env.base_stations))
@@ -161,10 +175,12 @@ def eval_one_episode_qplex(agent, rollout_horizon: int = 200) -> Dict[str, float
         "on_ratio": float(out["on_ratio_mean"]),
         "reward_ue": float(out["ep_r_ue_sum"]) / ep_len,
         "reward_bs": float(out["ep_r_bs_sum"]) / ep_len / n_bs,
+        "reward_ue_hist": list(out.get("reward_ue_hist", [])),
+        "reward_bs_hist": list(out.get("reward_bs_hist", [])),
     }
 
 @torch.no_grad()
-def eval_one_episode_mappo(trainer, rollout_horizon: int = 200) -> Dict[str, float]:
+def eval_one_episode_mappo(trainer, rollout_horizon: int = 200) -> Dict[str, Any]:
     out = trainer.evaluate(n_steps=rollout_horizon)
 
     throughput = float(np.mean(out["throughput_history"])) if len(out["throughput_history"]) > 0 else 0.0
@@ -188,6 +204,8 @@ def eval_one_episode_mappo(trainer, rollout_horizon: int = 200) -> Dict[str, flo
         "on_ratio": on_ratio,
         "reward_ue": reward_ue,
         "reward_bs": reward_bs,
+        "reward_ue_hist": list(out.get("reward_ue_hist", [])),
+        "reward_bs_hist": list(out.get("reward_bs_hist", [])),
     }
 
 # -------------------------------------------------
@@ -203,11 +221,14 @@ def evaluate_model(
     device: str = "cuda",
 ) -> Dict[str, Any]:
     
+    reward_ue_hists, reward_bs_hists = [], []
+    
     throughput_list, fairness_list, on_ratio_list, reward_ue_list, reward_bs_list = [], [], [], [], []
     
     for seed in seeds:
         set_seed(seed)
         env = build_env(**env_kwargs)
+
         if model_name.lower() == "qmix":
             model = load_qmix_agent(env, ckpt_path, device=device)
             eval_fn = eval_one_ep_qmix
@@ -227,6 +248,8 @@ def evaluate_model(
         on_ratio_list.append(ep_metrics["on_ratio"])
         reward_ue_list.append(ep_metrics["reward_ue"])
         reward_bs_list.append(ep_metrics["reward_bs"])
+        reward_ue_hists.append(ep_metrics["reward_ue_hist"])
+        reward_bs_hists.append(ep_metrics["reward_bs_hist"])
 
         print(
             f"[{model_name.upper()}][seed={seed}] "
@@ -249,6 +272,8 @@ def evaluate_model(
         "reward_ue": summarize_metric(reward_ue_list),
         "reward_bs": summarize_metric(reward_bs_list),
         "device": device,
+        "reward_ue_hists": reward_ue_hists,
+        "reward_bs_hists": reward_bs_hists,
     }
 
     return result
@@ -281,6 +306,32 @@ def print_summary_table(results: List[Dict[str, Any]]):
         )
     print("=" * 100 + "\n")
 
+def plot_reward_histories(results: List[Dict[str, Any]], 
+                          reward_key: str,
+                          save_path: str,
+                          y_label: str,
+                          ma_window: int = 1000):
+    plt.figure(figsize=(12, 6))
+    for r in results:
+        arr = np.asarray(r[reward_key], dtype=np.float64)  # (n_seeds, T)
+        mean_curve = arr.mean(axis=0)
+        mean_curve_ma = moving_average(mean_curve, window=ma_window)
+
+        x=np.arange(1, len(mean_curve_ma) + 1)
+        rawline, = plt.plot(x, mean_curve, alpha=0.2)
+        plt.plot(x, mean_curve_ma, linewidth=2, color=rawline.get_color(), label=r['model_name'].upper())
+    
+    plt.xlabel("Eval Step")
+    plt.ylabel(y_label)
+    plt.title("Reward History Comparison")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=200)
+    plt.close()
+
+    print(f"Saved reward history plot to {save_path}")
+
 # -------------------------------------------------
 # Main
 # -------------------------------------------------
@@ -306,7 +357,7 @@ def main():
         "mappo": os.path.join(REPO_ROOT, "checkpoints", "mappo_50k.pt"),
     }
 
-    seeds = [42, 43, 44] 
+    seeds = [0, 80, 1000] 
     results = []
 
     for model_name, ckpt_path in ckpts.items():
@@ -327,6 +378,11 @@ def main():
         json.dump(results, f, indent=2)
     
     print(f"Saved evaluation results to {save_path}")
+
+    plot_reward_histories(results, reward_key="reward_ue_hists", y_label="UE Reward",
+                          save_path=os.path.join(REPO_ROOT, "results", "reward_ue_ma1000.png"))
+    plot_reward_histories(results, reward_key="reward_bs_hists", y_label="BS Reward",
+                          save_path=os.path.join(REPO_ROOT, "results", "reward_bs_ma1000.png"))
 
 if __name__ == "__main__":
     main()

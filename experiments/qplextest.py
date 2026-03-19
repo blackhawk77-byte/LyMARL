@@ -302,8 +302,8 @@ def run_eval(args):
         seq_len=args.seq_len,
         capacity_episodes=args.capacity_episodes,
         update_interval_steps=args.update_interval_steps,
-        eps_start=0.001,
-        eps_end=0.001,
+        eps_start=0.00,
+        eps_end=0.00,
         eps_decay=1.0,
         n_heads=args.n_heads,
     )
@@ -392,7 +392,7 @@ def main():
     
     # eval
     parser.add_argument("--episodes", type=int, default=1)
-    parser.add_argument("--eval_epsilon", type=float, default=0.001)
+    parser.add_argument("--eval_epsilon", type=float, default=0.0)
 
     args = parser.parse_args()
     set_seed(args.seed)

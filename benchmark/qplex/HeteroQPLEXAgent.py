@@ -184,8 +184,8 @@ class HeteroQPLEXAgent:
         # Load-aware / Z-aware bias for UE decisions
         # -------------------------------------------------
         running_req_counts = np.zeros(self.N_bs, dtype=np.float32)
-        k_cong = 2.0   # 몰림 패널티
-        #k_z = 0.02     # Z 큰 BS 회피
+        k_cong = 2.0   # 몰림 패널티 1.0~1.1
+        #k_z = 0.0     # Z 큰 BS 회피 0.0~0.005
         ideal = 1.0 / max(1, self.N_bs)
 
         ue_actions_arr = []
@@ -201,8 +201,8 @@ class HeteroQPLEXAgent:
                     q_i[b] -= k_cong * excess
 
                 # 2) Z_b가 큰 BS면 bias
-         #       bs_id = self.base_stations[b].bs_id
-          #      q_i[b] -= k_z * float(self.env.Z_b[bs_id])
+                #bs_id = self.base_stations[b].bs_id
+                #q_i[b] -= k_z * float(self.env.Z_b[bs_id])
             
             # mask 다시 안전하게 적용
             invalid_mask = ~ue_mask_t[i]
@@ -283,6 +283,8 @@ class HeteroQPLEXAgent:
         ep_r_bs = 0.0 
         done_flag = False
 
+        reward_ue_hist, reward_bs_hist = [], []
+
         for _ in range(n_steps):
             (ue_actions, ue_actions_arr, ue_obs_batch, ue_masks_batch,
             bs_actions, bs_actions_arr, bs_obs_batch, bs_masks_batch, cand_lists) = self.select_actions(local_obs, global_obs)
@@ -340,6 +342,8 @@ class HeteroQPLEXAgent:
             rew_bs = float(info['bs_team_reward'])
             ep_r_ue += rew_ue
             ep_r_bs += rew_bs
+            reward_ue_hist.append(rew_ue)
+            reward_bs_hist.append(rew_bs)
 
             # ---- next obs for UE ----
             ue_next_obs_batch = np.stack([next_local_obs[u.ue_id] for u in self.users], axis=0).astype(np.float32)  # (N_ue, obs_dim)
@@ -415,7 +419,13 @@ class HeteroQPLEXAgent:
 
         T = len(ue_lo)
         if T == 0:
-            return {"ep_len": 0.0, "ep_r_ue_sum": 0.0, "ep_r_bs_sum": 0.0, "epsilon": float(self.eps)}
+            return {"ep_len": 0.0, 
+                    "ep_r_ue_sum": 0.0, 
+                    "ep_r_bs_sum": 0.0, 
+                    "epsilon": float(self.eps),
+                    "reward_ue_hist": [],
+                    "reward_bs_hist": []
+            }
 
         # stack as (T, N, dim)
         ue_lo = torch.stack(ue_lo, dim=0)
@@ -462,6 +472,8 @@ class HeteroQPLEXAgent:
                 "ep_r_ue_sum": float(ep_r_ue),
                 "ep_r_bs_sum": float(ep_r_bs),
                 "epsilon": float(self.eps),
+                "reward_ue_hist": reward_ue_hist,
+                "reward_bs_hist": reward_bs_hist
             }  
     
     # -------------------------
