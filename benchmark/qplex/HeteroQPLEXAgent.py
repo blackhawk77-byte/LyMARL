@@ -184,8 +184,8 @@ class HeteroQPLEXAgent:
         # Load-aware / Z-aware bias for UE decisions
         # -------------------------------------------------
         running_req_counts = np.zeros(self.N_bs, dtype=np.float32)
-        k_cong = 2.0   # 몰림 패널티 1.0~1.1
-        #k_z = 0.0     # Z 큰 BS 회피 0.0~0.005
+        k_cong = 0.0   # 몰림 패널티 1.0~1.1
+        k_z = 0.01     # Z 큰 BS 회피 0.0~0.005
         ideal = 1.0 / max(1, self.N_bs)
 
         ue_actions_arr = []
@@ -201,8 +201,8 @@ class HeteroQPLEXAgent:
                     q_i[b] -= k_cong * excess
 
                 # 2) Z_b가 큰 BS면 bias
-                #bs_id = self.base_stations[b].bs_id
-                #q_i[b] -= k_z * float(self.env.Z_b[bs_id])
+                bs_id = self.base_stations[b].bs_id
+                q_i[b] -= k_z * float(self.env.Z_b[bs_id])
             
             # mask 다시 안전하게 적용
             invalid_mask = ~ue_mask_t[i]

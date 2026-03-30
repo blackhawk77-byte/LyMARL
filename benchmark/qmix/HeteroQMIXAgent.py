@@ -194,8 +194,8 @@ class HeteroQMIXAgent:
         # Load-aware / Z-aware bias for UE decisions
         # -------------------------------------------------
         running_req_counts = np.zeros(self.N_bs, dtype=np.float32)
-        k_cong = 2.0   # 몰림 패널티
-        k_z = 0.02     # Z 큰 BS 회피
+        k_cong = 0.0   # 몰림 패널티
+        k_z = 0.01     # Z 큰 BS 회피
         ideal = 1.0 / max(1, self.N_bs)
 
         ue_actions_arr = []

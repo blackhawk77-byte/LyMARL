@@ -1,4 +1,4 @@
-# trainer.py
+# trainer_LyMARL.py
 import numpy as np
 import torch
 import torch.nn as nn
@@ -14,11 +14,11 @@ from collections import defaultdict
 try:
     from norms import ValueNorm, ValueNormVec
     from networks import UEActorNetwork, BSActorNetwork, CentralizedCriticUE, CentralizedCriticBS
-    from env import MAPPOEnvironment
+    from env_LyMARL import MAPPOEnvironment
 except Exception:
     from .norms import ValueNorm, ValueNormVec
     from .networks import UEActorNetwork, BSActorNetwork, CentralizedCriticUE, CentralizedCriticBS
-    from .env import MAPPOEnvironment
+    from .env_LyMARL import MAPPOEnvironment
 
 
 class MAPPOTrainer:
@@ -423,8 +423,8 @@ class MAPPOTrainer:
         print(f"{'='*100}")
         print(f" Total train steps: {n_steps}")
         print(f" Update interval: {update_interval}")
-        print(f" ✅ UE reward(team): total_rate / N")
-        print(f" ✅ BS reward(per BS): -c*(on_ratio - rho)^2  (c={self.env.bs_over_penalty})")
+        print(f" ✅ UE reward(team): mean_u[ served_rate_u * Q_u(t+1) ]")
+        print(f" ✅ BS reward(per BS): alpha*served_rate - c*max(0,on_ratio-rho)^2 - beta*Z_b*ON")
         print(f" ✅ UE action includes NO-REQUEST at index {self.env.no_request_action}")
         print(f"{'='*100}\n")
 
@@ -433,7 +433,6 @@ class MAPPOTrainer:
         power_history = {bs.bs_id: [] for bs in self.env.base_stations}
         slot_rates = []
 
-        # ✅ renamed
         queue_history = {"Q_u": defaultdict(list), "Z_b": defaultdict(list)}
         reward_hist = {"ue": [], "bs": []}
 
@@ -487,7 +486,6 @@ class MAPPOTrainer:
             for bs_id, power in info["power_consumed"].items():
                 power_history[bs_id].append(power)
 
-            # ✅ renamed
             for ue_id, q_val in info["Q_u"].items():
                 queue_history["Q_u"][ue_id].append(q_val)
             for bs_id, zb_val in info["Z_b"].items():
@@ -527,7 +525,6 @@ class MAPPOTrainer:
                 cong_sum = sum(info["prev_req_ratio"].values())
                 used_str = ", ".join([f"BS{b}:{info['bs_on_used_in_window'][b]}" for b in on_ratios.keys()])
 
-                # how many chose NO-REQUEST in this step (debug)
                 no_req_cnt = sum(1 for a in ue_actions.values() if int(a) == self.env.no_request_action)
 
                 print(f"Step {step+1:5d} | Thr:{recent_thr:.3f} | Fair:{recent_fair:.3f} | "

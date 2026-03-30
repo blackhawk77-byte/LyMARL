@@ -20,7 +20,7 @@ import csv
 from basestation import SmallCellBaseStation
 from user_equipment import UserEquipment
 from core import generate_triangle_coverage
-from LyMARL.env import MAPPOEnvironment
+from LyMARL.env_LyMARL import MAPPOEnvironment
 from LyMARL.trainer import MAPPOTrainer
 from benchmark.qmix.HeteroQMIXAgent import HeteroQMIXAgent, HeteroQMIXcfg
 
