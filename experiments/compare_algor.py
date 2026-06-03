@@ -16,11 +16,11 @@ import torch
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, REPO_ROOT)
 
-from basestation import SmallCellBaseStation
-from user_equipment import UserEquipment
-from core import generate_triangle_coverage
-from LyMARL.env_LyMARL import MAPPOEnvironment
-from LyMARL.trainer import MAPPOTrainer
+from LyMARL.basestation import SmallCellBaseStation
+from LyMARL.user_equipment import UserEquipment
+from LyMARL.core import generate_triangle_coverage
+from LyMARL.env_mappo import MAPPOEnvironment
+from LyMARL.trainer_mappo import MAPPOTrainer
 
 from benchmark.qmix.HeteroQMIXAgent import HeteroQMIXAgent, HeteroQMIXcfg
 from benchmark.qplex.HeteroQPLEXAgent import HeteroQPLEXAgent, HeteroQPLEXcfg

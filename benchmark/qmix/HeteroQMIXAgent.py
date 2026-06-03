@@ -17,7 +17,7 @@ import os
 
 from benchmark.qmix.qmix import AgentNetwork, MixingNetwork
 from benchmark.qmix.replaybuffer import ReplayBufferRNN
-from LyMARL.norms import ValueNorm
+from LyMARL.networks_mappo import ValueNorm
 
 
 # -------------------------

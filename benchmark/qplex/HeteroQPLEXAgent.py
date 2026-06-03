@@ -13,7 +13,7 @@ import os
 from benchmark.qplex.qplex import AgentNetwork as QAgentNet
 from benchmark.qplex.qplex import QPLEXDuplexDueling
 from benchmark.qmix.replaybuffer import ReplayBufferRNN
-from LyMARL.norms import ValueNorm
+from LyMARL.networks_mappo import ValueNorm
 
 # -------------------------
 # Utils
