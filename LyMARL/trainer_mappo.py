@@ -8,7 +8,7 @@ from torch.distributions import Categorical
 from collections import defaultdict
 from typing import Dict, Optional
 
-from networks_mappo import (
+from LyMARL.networks_mappo import (
     UEActorNetwork,
     BSActorNetwork,
     CentralizedCriticUE,
@@ -16,7 +16,7 @@ from networks_mappo import (
     ValueNorm,
     ValueNormVec,
 )
-from utils_mappo import moving_avg, block_avg_1d
+from LyMARL.utils_mappo import moving_avg, block_avg_1d
 
 
 class MAPPOTrainer:
@@ -480,11 +480,20 @@ class MAPPOTrainer:
     # =========================================================
     # Train / Eval
     # =========================================================
-    def train(self, n_steps: int, update_interval: int = 128, save_npz_path: Optional[str] = None):
+    def train(self, 
+              n_episodes: int, 
+              steps_per_episode: int, 
+              update_interval: int = 128, 
+              queue_reset_interval: Optional[int] = None,
+              save_npz_path: Optional[str] = None
+              ):
         print(f"\n{'='*100}")
         print(" Hetero-MAPPO Training")
         print(f"{'='*100}")
-        print(f"Total train steps: {n_steps}")
+        print(f"Total train episodes: {n_episodes}")
+        print(f"Steps per episode: {steps_per_episode}")
+        print(f"Total train steps: {n_episodes * steps_per_episode}")
+        print(f"Queue reset interval: {queue_reset_interval}")
         print(f"Update interval: {update_interval}")
         print(f"Hard constraint during training: {self.env.use_hard_constraint}")
         print(f"{'='*100}\n")
@@ -500,95 +509,142 @@ class MAPPOTrainer:
         bs_reward_vec_hist = []
         bs_reward_mean_hist = []
 
-        local_obs, global_obs = self.env.reset()
+        global_step =0
 
-        for step in range(n_steps):
-            (ue_actions, ue_logp_np, ue_ent_np, ue_masks_np,
-             bs_actions, bs_logp_np, bs_ent_np, bs_obs_np, bs_masks_np, cand_lists,
-             v_ue_n, v_bs_n_np) = self.select_actions(local_obs, global_obs)
+        for ep in range(n_episodes):
+            local_obs, global_obs = self.env.reset()
 
-            next_local_obs, next_global_obs, info, done = self.env.step_joint(
-                ue_actions=ue_actions,
-                bs_actions=bs_actions,
-                cand_lists=cand_lists
-            )
+            for ep_step in range(steps_per_episode):
 
-            with torch.no_grad():
-                next_global_t = torch.as_tensor(next_global_obs, dtype=torch.float32, device=self.device).unsqueeze(0)
-                nv_ue_n = float(self.critic_ue(next_global_t).squeeze(0).item())
-                nv_bs_n = self.critic_bs(next_global_t).squeeze(0).detach().cpu().numpy().astype(np.float32)
+                (ue_actions, ue_logp_np, ue_ent_np, ue_masks_np,
+                bs_actions, bs_logp_np, bs_ent_np, bs_obs_np, bs_masks_np, cand_lists,
+                v_ue_n, v_bs_n_np) = self.select_actions(local_obs, global_obs)
 
-            rew_ue = float(info["ue_team_reward"])
-            rew_bs = np.array(info["bs_rewards"], dtype=np.float32).reshape(-1)
+                next_local_obs, next_global_obs, info, done = self.env.step_joint(
+                    ue_actions=ue_actions,
+                    bs_actions=bs_actions,
+                    cand_lists=cand_lists
+                )
 
-            self.store_step(
-                local_obs=local_obs,
-                global_obs=global_obs,
-                ue_actions_dict=ue_actions,
-                ue_logp_np=ue_logp_np,
-                ue_masks_np=ue_masks_np,
-                bs_actions_dict=bs_actions,
-                bs_logp_np=bs_logp_np,
-                bs_obs_np=bs_obs_np,
-                bs_masks_np=bs_masks_np,
-                cand_lists=cand_lists,
-                rew_ue=rew_ue,
-                rew_bs=rew_bs,
-                v_ue_n=float(v_ue_n),
-                nv_ue_n=float(nv_ue_n),
-                v_bs_n=v_bs_n_np,
-                nv_bs_n=nv_bs_n,
-                done=done
-            )
+                with torch.no_grad():
+                    next_global_t = torch.as_tensor(next_global_obs, dtype=torch.float32, device=self.device).unsqueeze(0)
+                    nv_ue_n = float(self.critic_ue(next_global_t).squeeze(0).item())
+                    nv_bs_n = self.critic_bs(next_global_t).squeeze(0).detach().cpu().numpy().astype(np.float32)
 
-            throughput_history.append(info["total_throughput"])
-            rates_this_slot = [info["served_rates"][u.ue_id] for u in self.env.users]
-            slot_rates.append(rates_this_slot)
-            fairness_history.append(self.env.calculate_jain_fairness(slot_rates))
+                rew_ue = float(info["ue_team_reward"])
+                rew_bs = np.array(info["bs_rewards"], dtype=np.float32).reshape(-1)
 
-            for bs_id, power in info["power_consumed"].items():
-                power_history[bs_id].append(power)
+                queue_reset_now = (
+                    queue_reset_interval is not None
+                    and queue_reset_interval > 0
+                    and (ep_step + 1) % queue_reset_interval == 0
+                    and (ep_step + 1) < steps_per_episode
+                )
+                done_to_store = done or (ep_step == steps_per_episode - 1)
+                
+                self.store_step(
+                    local_obs=local_obs,
+                    global_obs=global_obs,
+                    ue_actions_dict=ue_actions,
+                    ue_logp_np=ue_logp_np,
+                    ue_masks_np=ue_masks_np,
+                    bs_actions_dict=bs_actions,
+                    bs_logp_np=bs_logp_np,
+                    bs_obs_np=bs_obs_np,
+                    bs_masks_np=bs_masks_np,
+                    cand_lists=cand_lists,
+                    rew_ue=rew_ue,
+                    rew_bs=rew_bs,
+                    v_ue_n=float(v_ue_n),
+                    nv_ue_n=float(nv_ue_n),
+                    v_bs_n=v_bs_n_np,
+                    nv_bs_n=nv_bs_n,
+                    done=done_to_store
+                )
 
-            for ue_id, q_val in info["Q_u"].items():
-                queue_history["Q_u"][ue_id].append(q_val)
-            for bs_id, zb_val in info["Z_b"].items():
-                queue_history["Z_b"][bs_id].append(zb_val)
+                throughput_history.append(info["total_throughput"])
+                rates_this_slot = [info["served_rates"][u.ue_id] for u in self.env.users]
+                slot_rates.append(rates_this_slot)
+                fairness_history.append(self.env.calculate_jain_fairness(slot_rates))
 
-            ue_team_reward_hist.append(rew_ue)
-            ue_per_user_reward_hist.append([float(info["ue_per_user_rewards"][u.ue_id]) for u in self.env.users])
-            bs_reward_vec_hist.append(rew_bs.tolist())
-            bs_reward_mean_hist.append(float(rew_bs.mean()))
+                for bs_id, power in info["power_consumed"].items():
+                    power_history[bs_id].append(power)
 
-            local_obs, global_obs = next_local_obs, next_global_obs
+                for ue_id, q_val in info["Q_u"].items():
+                    queue_history["Q_u"][ue_id].append(q_val)
 
-            if (step + 1) % update_interval == 0:
-                losses = self.update()
-                if losses:
+                for bs_id, zb_val in info["Z_b"].items():
+                    queue_history["Z_b"][bs_id].append(zb_val)
+
+                ue_team_reward_hist.append(rew_ue)
+                ue_per_user_reward_hist.append([float(info["ue_per_user_rewards"][u.ue_id]) for u in self.env.users])
+                bs_reward_vec_hist.append(rew_bs.tolist())
+                bs_reward_mean_hist.append(float(rew_bs.mean()))
+
+                local_obs, global_obs = next_local_obs, next_global_obs
+                
+                if queue_reset_now:
+                    local_obs, global_obs = self.env.reset_queues()
+                    print(f"[QUEUE RESET] Ep {ep+1} | EpStep {ep_step+1} | "
+                    f"GlobalStep {global_step+1}",
+                    flush=True)
+
+                if (global_step + 1) % update_interval == 0:
+                    losses = self.update()
+                    if losses:
+                        print(
+                            f"[UPDATE] Global Step {global_step+1} | "
+                            f"UE_Actor:{losses['actor_ue']:.4f} | BS_Actor:{losses['actor_bs']:.4f} | "
+                            f"C_UE:{losses['critic_ue']:.4f} | C_BS:{losses['critic_bs']:.4f} | "
+                            f"Ent(UE):{losses['entropy_ue']:.4f} | Ent(BS):{losses['entropy_bs']:.4f}"
+                        )
+
+                if (global_step + 1) % 100 == 0:
+                    recent_thr = float(np.mean(throughput_history[-100:]))
+                    recent_fair = float(fairness_history[-1])
+                    ue_team_rew_100 = float(np.mean(ue_team_reward_hist[-100:]))
+                    bs_team_rew_100 = float(np.mean(bs_reward_mean_hist[-100:]))
+                    no_req_cnt = sum(1 for a in ue_actions.values() if int(a) == self.env.no_request_action)
+
+                    on_parts = []
+                    for bs in self.env.base_stations:
+                        hist = list(self.env.bs_on_hist[bs.bs_id])
+                        on_ratio_100 = float(np.mean(hist[-100:])) if len(hist) > 0 else 0.0
+                        on_parts.append(f"BS{bs.bs_id}:{on_ratio_100:.3f}")
+                    on_str = " ".join(on_parts)
+
                     print(
-                        f"[UPDATE] Step {step+1} | "
-                        f"UE_Actor:{losses['actor_ue']:.4f} | BS_Actor:{losses['actor_bs']:.4f} | "
-                        f"C_UE:{losses['critic_ue']:.4f} | C_BS:{losses['critic_bs']:.4f} | "
-                        f"Ent(UE):{losses['entropy_ue']:.4f} | Ent(BS):{losses['entropy_bs']:.4f}"
+                        f"Global Step {global_step+1:5d} | Ep {ep+1:3d} | EpStep {ep_step+1:4d} | "
+                        f"Thr:{recent_thr:.3f} | Fair:{recent_fair:.3f} | "
+                        f"ON(100): {on_str} | NO-REQ:{no_req_cnt}/{self.env.n_agents} | "
+                        f"UETeamRew(100):{ue_team_rew_100:.3f} | BSTeamRew(100):{bs_team_rew_100:.3f}"
                     )
 
-            if (step + 1) % 100 == 0:
-                recent_thr = float(np.mean(throughput_history[-100:]))
-                recent_fair = float(fairness_history[-1])
-                ue_team_rew_100 = float(np.mean(ue_team_reward_hist[-100:]))
-                bs_team_rew_100 = float(np.mean(bs_reward_mean_hist[-100:]))
-                no_req_cnt = sum(1 for a in ue_actions.values() if int(a) == self.env.no_request_action)
+                global_step += 1
 
-                on_parts = []
-                for bs in self.env.base_stations:
-                    hist = list(self.env.bs_on_hist[bs.bs_id])
-                    on_ratio_100 = float(np.mean(hist[-100:])) if len(hist) > 0 else 0.0
-                    on_parts.append(f"BS{bs.bs_id}:{on_ratio_100:.3f}")
-                on_str = " ".join(on_parts)
+                if done_to_store:
+                    print("\n" + "-" * 80)
+                    print(f"[EP END] Episode {ep+1}/{n_episodes} | GlobalStep {global_step} | EpStep {ep_step+1}")
 
+                    print("Final Q_u:")
+                    for ue_id, q_val in info["Q_u"].items():
+                        print(f"  UE{ue_id}: {q_val:.4f}")
+
+                    print("Final Z_b:")
+                    for bs_id, z_val in info["Z_b"].items():
+                        print(f"  BS{bs_id}: {z_val:.4f}")
+
+                    print("-" * 80 + "\n", flush=True)
+                    break
+
+        # 남은 rollout이 있으면 마지막 update
+        if len(self.rb["dones"]) > 0:
+            losses = self.update()
+            if losses:
                 print(
-                    f"Step {step+1:5d} | Thr:{recent_thr:.3f} | Fair:{recent_fair:.3f} | "
-                    f"ON(100): {on_str} | NO-REQ:{no_req_cnt}/{self.env.n_agents} | "
-                    f"UETeamRew(100):{ue_team_rew_100:.3f} | BSTeamRew(100):{bs_team_rew_100:.3f}"
+                    f"[FINAL UPDATE] GlobalStep {global_step} | "
+                    f"UE_Actor:{losses['actor_ue']:.4f} | BS_Actor:{losses['actor_bs']:.4f} | "
+                    f"C_UE:{losses['critic_ue']:.4f} | C_BS:{losses['critic_bs']:.4f}"
                 )
 
         results = {
@@ -610,11 +666,15 @@ class MAPPOTrainer:
         return results
 
     @torch.no_grad()
-    def evaluate(self, n_steps: int, save_npz_path: Optional[str] = None):
+    def evaluate(self, 
+                 n_episodes: int, 
+                 steps_per_episode: int,
+                 queue_reset_interval: Optional[int] = None,
+                 save_npz_path: Optional[str] = None):
         print(f"\n{'='*84}")
         print(" EVALUATION (No Learning)")
         print(f"{'='*84}")
-        print(f"Total eval steps: {n_steps}")
+        print(f"Total eval episodes: {n_episodes}")
         print(f"Hard constraint during evaluation: {self.env.use_hard_constraint}\n")
 
         self.ue_actor.eval()
@@ -634,72 +694,86 @@ class MAPPOTrainer:
 
         eval_on100_hist = {bs.bs_id: [] for bs in self.env.base_stations}
 
-        local_obs, global_obs = self.env.reset()
+        global_step = 0
 
-        for step in range(n_steps):
-            (ue_actions, ue_logp_np, ue_ent_np, ue_masks_np,
-             bs_actions, bs_logp_np, bs_ent_np, bs_obs_np, bs_masks_np, cand_lists,
-             v_ue_n, v_bs_n_np) = self.select_actions(local_obs, global_obs)
+        for ep in range(n_episodes):
+            local_obs, global_obs = self.env.reset()
 
-            next_local_obs, next_global_obs, info, done = self.env.step_joint(
-                ue_actions=ue_actions,
-                bs_actions=bs_actions,
-                cand_lists=cand_lists
-            )
+            for ep_step in range(steps_per_episode):
+                (ue_actions, ue_logp_np, ue_ent_np, ue_masks_np,
+                bs_actions, bs_logp_np, bs_ent_np, bs_obs_np, bs_masks_np, cand_lists,
+                v_ue_n, v_bs_n_np) = self.select_actions(local_obs, global_obs)
 
-            throughput_history.append(info["total_throughput"])
-            rates_this_slot = [info["served_rates"][u.ue_id] for u in self.env.users]
-            slot_rates.append(rates_this_slot)
-            fairness_history.append(self.env.calculate_jain_fairness(slot_rates))
-
-            for bs_id, power in info["power_consumed"].items():
-                power_history[bs_id].append(power)
-
-            ue_team_reward_hist.append(float(info["ue_team_reward"]))
-            ue_per_user_reward_hist.append([float(info["ue_per_user_rewards"][u.ue_id]) for u in self.env.users])
-
-            bs_vec = np.array(info["bs_rewards"], dtype=np.float32).reshape(-1)
-            bs_reward_vec_hist.append(bs_vec.tolist())
-            bs_reward_mean_hist.append(float(np.mean(bs_vec)))
-
-            local_obs, global_obs = next_local_obs, next_global_obs
-
-            if (step + 1) % 100 == 0:
-                recent_thr = float(np.mean(throughput_history[-100:]))
-                recent_fair = float(fairness_history[-1])
-                no_req_cnt = sum(1 for a in ue_actions.values() if int(a) == self.env.no_request_action)
-
-                on_parts = []
-                for bs in self.env.base_stations:
-                    hist = list(self.env.bs_on_hist[bs.bs_id])
-                    on_ratio_100 = float(np.mean(hist[-100:])) if len(hist) > 0 else 0.0
-                    eval_on100_hist[bs.bs_id].append(on_ratio_100)
-                    on_parts.append(f"BS{bs.bs_id}:{on_ratio_100:.3f}")
-                on_str = " ".join(on_parts)
-
-                print(
-                    f"[EVAL] Step {step+1:5d} | Thr:{recent_thr:.3f} | Fair:{recent_fair:.3f} | "
-                    f"ON(100): {on_str} | NO-REQ:{no_req_cnt}/{self.env.n_agents}"
+                next_local_obs, next_global_obs, info, done = self.env.step_joint(
+                    ue_actions=ue_actions,
+                    bs_actions=bs_actions,
+                    cand_lists=cand_lists
                 )
 
-            if (step + 1) % 10000 == 0:
-                thr_10k_mean = float(np.mean(throughput_history[-10000:]))
-                fair_10k_mean = float(np.mean(fairness_history[-10000:]))
+                done_to_stop = done or (ep_step == steps_per_episode - 1)
+                
+                throughput_history.append(info["total_throughput"])
+                rates_this_slot = [info["served_rates"][u.ue_id] for u in self.env.users]
+                slot_rates.append(rates_this_slot)
+                fairness_history.append(self.env.calculate_jain_fairness(slot_rates))
 
-                on10k_parts = []
-                n_blocks_10k = max(1, 10000 // 100)
-                for bs in self.env.base_stations:
-                    recent_on100 = eval_on100_hist[bs.bs_id][-n_blocks_10k:]
-                    on10k_mean = float(np.mean(recent_on100)) if len(recent_on100) > 0 else 0.0
-                    on10k_parts.append(f"BS{bs.bs_id}:{on10k_mean:.3f}")
-                on10k_str = " ".join(on10k_parts)
+                for bs_id, power in info["power_consumed"].items():
+                    power_history[bs_id].append(power)
 
-                print(
-                    f"[EVAL-10K] Step {step+1:5d} | "
-                    f"ThroughputMean(10k):{thr_10k_mean:.3f} | "
-                    f"Mean(step-wise Fair(100) over 10k):{fair_10k_mean:.3f} | "
-                    f"ON100-Mean(10k): {on10k_str}"
-                )
+                ue_team_reward_hist.append(float(info["ue_team_reward"]))
+                ue_per_user_reward_hist.append([float(info["ue_per_user_rewards"][u.ue_id]) for u in self.env.users])
+
+                bs_vec = np.array(info["bs_rewards"], dtype=np.float32).reshape(-1)
+                bs_reward_vec_hist.append(bs_vec.tolist())
+                bs_reward_mean_hist.append(float(np.mean(bs_vec)))
+
+                local_obs, global_obs = next_local_obs, next_global_obs
+                
+                if queue_reset_interval is not None \
+                    and queue_reset_interval > 0 \
+                        and (ep_step + 1) % queue_reset_interval == 0 \
+                            and (ep_step + 1) < steps_per_episode:
+                    local_obs, global_obs = self.env.reset_queues()
+
+                if (global_step + 1) % 100 == 0:
+                    recent_thr = float(np.mean(throughput_history[-100:]))
+                    recent_fair = float(fairness_history[-1])
+                    no_req_cnt = sum(1 for a in ue_actions.values() if int(a) == self.env.no_request_action)
+
+                    on_parts = []
+                    for bs in self.env.base_stations:
+                        hist = list(self.env.bs_on_hist[bs.bs_id])
+                        on_ratio_100 = float(np.mean(hist[-100:])) if len(hist) > 0 else 0.0
+                        eval_on100_hist[bs.bs_id].append(on_ratio_100)
+                        on_parts.append(f"BS{bs.bs_id}:{on_ratio_100:.3f}")
+                    on_str = " ".join(on_parts)
+
+                    print(
+                        f"[EVAL] Global Step {global_step+1:5d} | Thr:{recent_thr:.3f} | Fair:{recent_fair:.3f} | "
+                        f"ON(100): {on_str} | NO-REQ:{no_req_cnt}/{self.env.n_agents}"
+                    )
+
+                if (global_step + 1) % 10000 == 0:
+                    thr_10k_mean = float(np.mean(throughput_history[-10000:]))
+                    fair_10k_mean = float(np.mean(fairness_history[-10000:]))
+
+                    on10k_parts = []
+                    n_blocks_10k = max(1, 10000 // 100)
+                    for bs in self.env.base_stations:
+                        recent_on100 = eval_on100_hist[bs.bs_id][-n_blocks_10k:]
+                        on10k_mean = float(np.mean(recent_on100)) if len(recent_on100) > 0 else 0.0
+                        on10k_parts.append(f"BS{bs.bs_id}:{on10k_mean:.3f}")
+                    on10k_str = " ".join(on10k_parts)
+
+                    print(
+                        f"[EVAL-10K] Global Step {global_step+1:5d} | "
+                        f"ThroughputMean(10k):{thr_10k_mean:.3f} | "
+                        f"Mean(step-wise Fair(100) over 10k):{fair_10k_mean:.3f} | "
+                        f"ON100-Mean(10k): {on10k_str}"
+                    )
+                global_step += 1
+                if done_to_stop:
+                    break
 
         results = {
             "throughput_history": throughput_history,

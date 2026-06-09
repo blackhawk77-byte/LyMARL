@@ -185,7 +185,7 @@ class HeteroQPLEXAgent:
         # -------------------------------------------------
         running_req_counts = np.zeros(self.N_bs, dtype=np.float32)
         k_cong = 0.0   # 몰림 패널티 1.0~1.1
-        k_z = 0.01     # Z 큰 BS 회피 0.0~0.005
+        k_z = 0.0     # Z 큰 BS 회피 0.0~0.005
         ideal = 1.0 / max(1, self.N_bs)
 
         ue_actions_arr = []

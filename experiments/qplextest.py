@@ -17,11 +17,10 @@ import matplotlib.pyplot as plt
 import time
 import csv
 
-from basestation import SmallCellBaseStation
-from user_equipment import UserEquipment
-from core import generate_triangle_coverage
-from LyMARL.env_LyMARL import MAPPOEnvironment
-from LyMARL.trainer import MAPPOTrainer
+from LyMARL.basestation import SmallCellBaseStation
+from LyMARL.user_equipment import UserEquipment
+from LyMARL.core import generate_triangle_coverage
+from LyMARL.env_mappo import MAPPOEnvironment
 from benchmark.qplex.HeteroQPLEXAgent import HeteroQPLEXAgent, HeteroQPLEXcfg
 
 # -------------------------
@@ -317,7 +316,7 @@ def run_eval(args):
     
     agent.eps = args.eval_epsilon
     logs = []
-    eval_horizon = 100000
+    eval_horizon = 50000
     print(f"\n[EVAL] episodes={args.episodes} | horizon={eval_horizon} | epsilon={args.eval_epsilon}\n")
 
     for ep_i in range(args.episodes):
@@ -392,7 +391,7 @@ def main():
     
     # eval
     parser.add_argument("--episodes", type=int, default=1)
-    parser.add_argument("--eval_epsilon", type=float, default=0.0)
+    parser.add_argument("--eval_epsilon", type=float, default=0.05)
 
     args = parser.parse_args()
     set_seed(args.seed)

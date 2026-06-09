@@ -1,13 +1,13 @@
 import os
 import numpy as np
 
-from basestation import SmallCellBaseStation
-from user_equipment import UserEquipment
-from core import generate_triangle_coverage
+from LyMARL.basestation import SmallCellBaseStation
+from LyMARL.user_equipment import UserEquipment
+from LyMARL.core import generate_triangle_coverage
 
-from utils_mappo import set_seed
-from env_mappo import MAPPOEnvironment
-from trainer_mappo import MAPPOTrainer
+from LyMARL.utils_mappo import set_seed
+from LyMARL.env_mappo import MAPPOEnvironment
+from LyMARL.trainer_mappo import MAPPOTrainer
 
 
 if __name__ == "__main__":
@@ -38,9 +38,6 @@ if __name__ == "__main__":
         bs_top_k=5,
         hard_window_len=10000,
         bs_over_penalty=100.0,
-        eta_q=1.0,
-        alpha_rate=3.0,
-        beta_z=1.0,
         use_hard_constraint=False,   # training: no hard constraint
     )
 
@@ -64,13 +61,14 @@ if __name__ == "__main__":
     # --------------------------------------------------
     # Train
     # --------------------------------------------------
-    train_steps = 50000
-    train_npz_path = "LyMARL_train_rewards.npz"
-    model_path = "LyMARL.pt"
+    train_npz_path = "LyMARL_train_ep100_queue_reset.npz"
+    model_path = "LyMARL_ep100.pt"
 
     trainer.train(
-        n_steps=train_steps,
+        n_episodes=100,
+        steps_per_episode=10000,
         update_interval=128,
+        queue_reset_interval=10000,  
         save_npz_path=train_npz_path,
     )
 
@@ -84,7 +82,12 @@ if __name__ == "__main__":
     # --------------------------------------------------
     trainer.env.set_hard_constraint(True)
 
-    eval_npz_path = None
-    trainer.evaluate(n_steps=100000, save_npz_path=eval_npz_path)
+    eval_npz_path = "LyMARL_eval_ep100_queue_reset.npz"
+    trainer.evaluate(
+        n_episodes=1, 
+        steps_per_episode=10000,
+        queue_reset_interval=10000,
+        save_npz_path=eval_npz_path
+    )
 
     print("\n✅ Completed!\n")

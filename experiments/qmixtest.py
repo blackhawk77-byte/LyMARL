@@ -17,11 +17,10 @@ import torch
 import matplotlib.pyplot as plt
 import time
 import csv
-from basestation import SmallCellBaseStation
-from user_equipment import UserEquipment
-from core import generate_triangle_coverage
-from LyMARL.env_LyMARL import MAPPOEnvironment
-from LyMARL.trainer import MAPPOTrainer
+from LyMARL.basestation import SmallCellBaseStation
+from LyMARL.user_equipment import UserEquipment
+from LyMARL.core import generate_triangle_coverage
+from LyMARL.env_mappo import MAPPOEnvironment
 from benchmark.qmix.HeteroQMIXAgent import HeteroQMIXAgent, HeteroQMIXcfg
 
 

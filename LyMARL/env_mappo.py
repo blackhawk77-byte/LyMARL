@@ -2,8 +2,8 @@ import numpy as np
 from typing import List, Dict, Tuple, Optional
 from collections import defaultdict, deque
 
-from basestation import BaseStation
-from user_equipment import UserEquipment
+from LyMARL.basestation import BaseStation
+from LyMARL.user_equipment import UserEquipment
 
 
 class MAPPOEnvironment:
@@ -18,16 +18,13 @@ class MAPPOEnvironment:
         base_stations: List[BaseStation],
         users: List[UserEquipment],
         V: float = 20.0,
-        power_budget_ratio: float = 0.8,
+        power_budget_ratio: float = 0.6,
         enable_mobility: bool = True,
         enable_channel_variation: bool = True,
         on_window: int = 100,
         bs_top_k: int = 5,
         hard_window_len: int = 10000,
         bs_over_penalty: float = 50.0,
-        eta_q: float = 1.0,
-        alpha_rate: float = 3.0,
-        beta_z: float = 1.0,
         use_hard_constraint: bool = False,
     ):
         self.base_stations = [bs for bs in base_stations if bs.bs_id != 0]
@@ -41,9 +38,6 @@ class MAPPOEnvironment:
         self.enable_channel_variation = bool(enable_channel_variation)
 
         self.bs_over_penalty = float(bs_over_penalty)
-        self.eta_q = float(eta_q)
-        self.alpha_rate = float(alpha_rate)
-        self.beta_z = float(beta_z)
 
         self.bs_top_k = int(bs_top_k)
         assert self.bs_top_k >= 1
@@ -65,8 +59,8 @@ class MAPPOEnvironment:
         }
 
         # Queues
-        self.Q_u = {u.ue_id: 0.1 for u in users}
-        self.Z_b = {bs.bs_id: 0.01 for bs in self.base_stations}
+        self.Q_u = {u.ue_id: 1.0 for u in users}
+        self.Z_b = {bs.bs_id: 1.0 for bs in self.base_stations}
         self.R_max = {u.ue_id: 5.0 for u in users}
 
         # Channel / mobility
@@ -127,8 +121,8 @@ class MAPPOEnvironment:
         print(f"#UE={self.n_agents} | #BS={self.n_bs} | UE_action_dim={self.action_dim} | BS_action_dim={self.bs_action_dim}")
         print(f"V={self.V} | power_budget_ratio={self.power_budget_ratio} | bs_over_penalty={self.bs_over_penalty}")
         print(f"UE team reward = mean_u[ served_rate_u * Q_u(t+1) ]")
-        print(f"Per-user reward (logging only) = served_rate_u - eta_q * Q_u(t+1)")
-        print(f"BS reward = alpha*served_rate - c*max(0, on_ratio-rho)^2 - beta*Z_b(t+1)*ON")
+        print(f"Per-user reward (logging only) = served_rate_u * Q_u(t)")
+        print(f"BS reward = alpha*served_rate - c*max(0, on_ratio-rho)^2")
         print(f"Hard constraint enabled: {self.use_hard_constraint}")
         print(f"local_obs_dim={self.local_obs_dim} | bs_obs_dim={self.bs_obs_dim} | global_obs_dim={self.global_obs_dim}")
         print(f"{'='*96}\n")
@@ -145,8 +139,8 @@ class MAPPOEnvironment:
 
         self.update_channel_gains(0)
 
-        self.Q_u = {u.ue_id: 0.1 for u in self.users}
-        self.Z_b = {bs.bs_id: 0.01 for bs in self.base_stations}
+        self.Q_u = {u.ue_id: 1.0 for u in self.users}
+        self.Z_b = {bs.bs_id: 1.0 for bs in self.base_stations}
         self.R_max = {u.ue_id: 5.0 for u in self.users}
 
         self.bs_on_hist = {bs.bs_id: deque(maxlen=self.on_window) for bs in self.base_stations}
@@ -158,7 +152,14 @@ class MAPPOEnvironment:
 
         self.update_max_rates()
         return self._get_observations()
-
+    
+    def reset_queues(self):
+        self.Q_u = {u.ue_id: 1.0 for u in self.users}
+        self.Z_b = {bs.bs_id: 1.0 for bs in self.base_stations}
+        self.R_max = {u.ue_id: 5.0 for u in self.users}
+        self.update_max_rates()
+        return self._get_observations()
+    
     # =========================================================
     # Dynamics
     # =========================================================
@@ -534,29 +535,40 @@ class MAPPOEnvironment:
             self.Z_b[bs.bs_id] = max(0.001, self.Z_b[bs.bs_id] + (power - budget))
 
         # UE team reward
-        # Current implementation uses updated queue, i.e., Q_u(t+1)
         ue_team_reward = float(np.mean([
-            served_rates[u.ue_id] * self.Q_u[u.ue_id] for u in self.users
+            old_Q_u[u.ue_id] * served_rates[u.ue_id]
+            for u in self.users
         ]))
 
         # Per-user reward for logging
         ue_per_user_rewards = {
-            u.ue_id: float(served_rates[u.ue_id] - self.eta_q * self.Q_u[u.ue_id])
+            u.ue_id: float(old_Q_u[u.ue_id] * served_rates[u.ue_id])
             for u in self.users
         }
 
         # BS rewards
-        on_feats = self._get_bs_on_features()
-        rho = self.power_budget_ratio
-        c = self.bs_over_penalty
-
         bs_rewards = []
+
         for bi, bs in enumerate(self.base_stations):
-            served_rate_i = float(bs_served_rate[bs.bs_id])
-            on_i = float(on_feats[bi])
-            over = max(0.0, on_i - rho)
-            on_now = 1.0 if power_consumed[bs.bs_id] > 0.0 else 0.0
-            r_i = self.alpha_rate * served_rate_i - c * (over ** 2) - self.beta_z * float(self.Z_b[bs.bs_id]) * on_now
+            bs_id = bs.bs_id
+            selected_ue = bs_selections[bs_id]
+
+            served_rate_i = float(bs_served_rate[bs_id])
+            P_tx_i = float(self.P_max[bs_id])
+            Z_b_i = float(old_Z_b[bs_id])
+
+            if selected_ue is None:
+                # rate_reward = 0.0
+                # energy_penalty = 0.0
+                r_i = 0.0
+            else:
+                # eps_log = 1e-12
+                # rate_reward = float(np.log(max(served_rate_i, eps_log)))
+                # energy_penalty = P_tx_i * float(old_Z_b[bs_id])
+                Q_u_i = float(old_Q_u[selected_ue])
+                r_i = Q_u_i * served_rate_i - Z_b_i * P_tx_i
+            
+            # r_i = rate_reward - energy_penalty
             bs_rewards.append(float(r_i))
 
         bs_rewards = np.array(bs_rewards, dtype=np.float32)
@@ -593,8 +605,6 @@ class MAPPOEnvironment:
             "no_coverage_count": int(self.no_coverage_count),
             "bs_on_used_in_window": self.bs_on_used_in_window.copy(),
             "window_step": int(self.window_step),
-            "on_feats": on_feats,
-            "rho": float(rho),
 
             "ue_no_request_action": int(self.no_request_action),
             "hard_constraint_enabled": bool(self.use_hard_constraint),

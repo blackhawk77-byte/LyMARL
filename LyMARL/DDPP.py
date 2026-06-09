@@ -3,9 +3,9 @@ import matplotlib.pyplot as plt
 from typing import List
 from collections import defaultdict
 
-from basestation import BaseStation, SmallCellBaseStation
-from user_equipment import UserEquipment
-from core import generate_triangle_coverage
+from LyMARL.basestation import BaseStation, SmallCellBaseStation
+from LyMARL.user_equipment import UserEquipment
+from LyMARL.core import generate_triangle_coverage
 
 ################################################
 ## BASELINE DDPP ALGORITHM IMPLEMENTATION
