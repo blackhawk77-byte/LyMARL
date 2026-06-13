@@ -1,7 +1,5 @@
 """
-Usage examples:
-  python qmixtest.py --n_env_steps 5000 --rollout_horizon 200 --device cuda
-  python qmixtest.py --mode eval --episodes 5 --eval_epsilon 0.05
+qmixtest.py
 """
 from __future__ import annotations
 
@@ -10,13 +8,12 @@ import random
 import sys, os
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))  # /home/.../LyMARL
 sys.path.insert(0, REPO_ROOT)
+
 from dataclasses import asdict
 from typing import List, Tuple
 import numpy as np 
 import torch
-import matplotlib.pyplot as plt
-import time
-import csv
+
 from LyMARL.basestation import SmallCellBaseStation
 from LyMARL.user_equipment import UserEquipment
 from LyMARL.core import generate_triangle_coverage
@@ -38,124 +35,41 @@ def _sample_positions_uniform(n: int, low: float=10.0, high: float = 90.0) -> Li
     pts = np.random.uniform(low=low, high=high, size=(n, 2))
     return [(float(x), float(y)) for x, y in pts]
 
-def save_logs_csv(logs, path = "./results/train_logs/train_log.csv"):
+def save_qmix_npz(agent, logs, path: str):
+    """
+    Save QMIX training/evaluation metrics to .npz.
+    """
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    keys = set()
-    for x in logs:
-        keys |= set(x.keys())
-    keys = sorted(list(keys))
 
-    with open(path, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=keys)
-        w.writeheader()
-        for x in logs:
-            w.writerow(x)
+    rollout_logs = [x for x in logs if x.get("type") in ["rollout", "eval"]]
+    update_logs = [x for x in logs if x.get("type") == "update"]
 
-def moving_avg(x, w: int = 100):
-    x = np.asarray(x, dtype=float)
-    if w is None or w<=1 or len(x) <w:
-        return x, np.arange(len(x))
-    k = np.ones(w, dtype=float) / float(w)
-    y = np.convolve(x, k, mode='valid')
-    x = np.arange(w-1, w-1+len(y))
-    return y, x
+    np.savez(
+        path,
 
-def plot_train_metrics(logs, agent, window: int=100, save_dir: str = "./results/plots"):
-    os.makedirs(save_dir, exist_ok=True)
-    ts = time.strftime("%Y%m%d_%H%M%S")
+        # step-wise histories from agent
+        thr_history=np.asarray(getattr(agent, "thr_history", []), dtype=np.float32),
+        fair_history=np.asarray(getattr(agent, "fair_history_100step", []), dtype=np.float32),
+        on_ratio_history=np.asarray(getattr(agent, "on_ratio_history", []), dtype=np.float32),
+        reward_history_ue=np.asarray(getattr(agent, "reward_history_ue", []), dtype=np.float32),
+        reward_history_bs=np.asarray(getattr(agent, "reward_history_bs", []), dtype=np.float32),
+        step_history=np.asarray(getattr(agent, "step_history", []), dtype=np.int64),
 
-    # =========================
-    # (A) logs 기반: thr/on/fair + loss
-    # =========================
-    step_cursor = 0
-    x_roll, thr_mean, on_ratio_100, fair_100 = [], [], [], []
-    x_upd, loss_ue, loss_bs = [], [], []
+        # rollout/eval summary logs
+        rollout_thr_mean=np.asarray([x.get("thr_mean", np.nan) for x in rollout_logs], dtype=np.float32),
+        rollout_fair_mean=np.asarray([x.get("fair_mean", np.nan) for x in rollout_logs], dtype=np.float32),
+        rollout_on_ratio_mean=np.asarray([x.get("on_ratio_mean", np.nan) for x in rollout_logs], dtype=np.float32),
+        rollout_ep_r_ue_sum=np.asarray([x.get("ep_r_ue_sum", np.nan) for x in rollout_logs], dtype=np.float32),
+        rollout_ep_r_bs_sum=np.asarray([x.get("ep_r_bs_sum", np.nan) for x in rollout_logs], dtype=np.float32),
+        rollout_ep_len=np.asarray([x.get("ep_len", np.nan) for x in rollout_logs], dtype=np.float32),
 
-    for row in logs:
-        typ = row.get("type", "")
-        if typ in ["rollout", "eval"]:
-            ep_len = int(float(row.get("ep_len", 0.0)))
-            step_cursor += max(0, ep_len)
-            x_roll.append(step_cursor)
-            thr_mean.append(float(row.get("thr_mean", float("nan"))))
-            on_ratio_100.append(float(row.get("on_ratio_mean", float("nan"))))
-            fair_100.append(float(row.get("fair_mean", float("nan"))))
-        elif typ == "update":
-            x_upd.append(step_cursor)
-            loss_ue.append(float(row.get("loss_ue", float("nan"))))
-            loss_bs.append(float(row.get("loss_bs", float("nan"))))
+        # update losses
+        loss_ue=np.asarray([x.get("loss_ue", np.nan) for x in update_logs], dtype=np.float32),
+        loss_bs=np.asarray([x.get("loss_bs", np.nan) for x in update_logs], dtype=np.float32),
+    )
 
-    def _plot(x, y, title, fname):
-        if len(x) == 0:
-            return
-        plt.figure(figsize=(10, 4))
-        plt.plot(x, y, alpha=0.35, label="raw")
-        y_ma, idx = moving_avg(y, window)
-        if len(y_ma) > 0:
-            plt.plot(np.asarray(x)[idx], y_ma, linewidth=2, label=f"MA{window}")
-        plt.title(title)
-        plt.xlabel("env steps (approx)")
-        plt.grid(True)
-        plt.legend()
-        plt.tight_layout()
-        out = os.path.join(save_dir, f"{fname}_{ts}.png")
-        plt.savefig(out, dpi=180)
-        plt.close()
-        print(f"[plot] saved: {out}")
+    print(f"✅ NPZ saved to: {os.path.abspath(path)}")
 
-    _plot(x_roll, thr_mean, "Throughput mean (thr_mean)", "thr_mean")
-    _plot(x_roll, on_ratio_100, "BS on ratio (on_ratio_mean)", "on_ratio_mean")
-    _plot(x_roll, fair_100, "JFI (fair_mean)", "fair_mean")
-    _plot(x_upd, loss_ue, "Loss (UE) - QMIX", "loss_ue")
-    _plot(x_upd, loss_bs, "Loss (BS) - QMIX", "loss_bs")
-
-    # =========================
-    # (B) agent 기반: UE/BS reward history
-    # =========================
-    if not hasattr(agent, "step_history"):
-        return
-    steps = np.asarray(agent.step_history)
-    ue_rewards = np.asarray(agent.reward_history_ue, dtype = float)
-    bs_rewards = np.asarray(agent.reward_history_bs, dtype = float)
-
-    T = min(len(steps), len(ue_rewards), len(bs_rewards))
-    if T <= 0:
-        return
-    steps = steps[:T]
-    ue_rewards = ue_rewards[:T]
-    bs_rewards = bs_rewards[:T]
-
-    ue_ma, ue_steps = moving_avg(ue_rewards,window)
-    bs_ma, bs_steps = moving_avg(bs_rewards, window)
-
-    fig, axes = plt.subplots(2,1, figsize=(14,8), sharex=True)
-    
-    # =========================
-    # (1) UE Team Reward
-    # =========================
-    ax0 = axes[0]
-    ax0.plot(steps, ue_rewards, alpha =0.3, label="UE team reward (raw)")
-    ax0.plot(ue_steps ,ue_ma,linewidth =2, label =f"UE team reward (MA{window})")
-    ax0.set_ylabel("UE team Reward")
-    ax0.legend()
-    ax0.grid(True)
-
-    # =========================
-    # (2) BS Team Reward
-    # =========================
-    ax1 = axes[1]
-    ax1.plot(steps, bs_rewards, alpha=0.3, label="BS team reward (raw)")
-    ax1.plot(bs_steps, bs_ma, linewidth=2, label=f"BS team reward (MA{window})")
-    ax1.set_xlabel("Steps")
-    ax1.set_ylabel("BS team Reward")
-    ax1.legend()
-    ax1.grid(True)
-
-    plt.tight_layout()
-    out_path = os.path.join(save_dir, f"reward_plot_qmix_{ts}.png")
-    plt.savefig(out_path,dpi=200)
-    print(f"[plot_reward] saved to: {out_path}")
-    plt.close(fig)
 
 # -------------------------
 # Env builder
@@ -226,6 +140,7 @@ def run_train(args):
     )
     
     agent = HeteroQMIXAgent(env=env, cfg=cfg, device=args.device)
+
     print("\n[QMIX TEST] Config:")
     print({
         "env":{
@@ -244,38 +159,22 @@ def run_train(args):
         }
     )
     print()
-    logs = agent.train(n_env_steps=args.n_env_steps, rollout_horizon=args.chunk_len)
     
-    if args.save_ckpt:
-        agent.save(args.ckpt_path)
-        print(f"[checkpoint] saved to: {args.ckpt_path}")
+    logs = agent.train(
+        n_env_steps=args.n_env_steps, 
+        rollout_horizon=args.chunk_len
+    )
     
-    rollouts = [x for x in logs if x.get("type") == "rollout"]
-    updates = [x for x in logs if x.get("type") == "update"]
-    if rollouts:
-        thr_all_mean = float(np.mean(agent.thr_history)) if len(agent.thr_history) > 0 else float("nan")
-        fair_all_mean = float(np.mean(agent.fair_history_100step)) if len(agent.fair_history_100step) > 0 else float("nan")
-        on_all_mean = float(np.mean(agent.on_ratio_history)) if len(agent.on_ratio_history) > 0 else float("nan")
+    # save model
+    os.makedirs(os.path.dirname(args.ckpt_path), exist_ok=True)
+    agent.save(args.ckpt_path)
 
-        last = rollouts[-1]
-        print(
-            f"[DONE] env_steps={agent.total_env_steps} | last_ep_len={last['ep_len']:.0f} "
-            f"| last_ep_r_ue_sum={last['ep_r_ue_sum']:.3f} "
-            f"| last_ep_r_bs_sum={last['ep_r_bs_sum']:.3f} "
-            f"| epsilon={last['epsilon']:.3f}"
-            f"| thr_mean={thr_all_mean:.3f} "
-            f"| fair_mean={fair_all_mean:.3f} "
-            f"| on_ratio={on_all_mean:.3f} "
-        )
-    if updates:
-        last_u = updates[-1]
-        print(
-            f"[DONE] last_update loss= (ue={last_u.get('loss_ue', float('nan')):.4f}, "
-            f"bs={last_u.get('loss_bs', float('nan')):.4f}) " 
-            f"| epsilon={last_u.get('epsilon', float('nan')):.3f}"
-        )
-    plot_train_metrics(logs, agent, save_dir="./results/plots", window=50)
-    save_logs_csv(logs)
+    # save train npz
+    save_qmix_npz(agent, logs, args.train_npz_path)
+
+    print(f"\n✅ Model saved to: {os.path.abspath(args.ckpt_path)}")
+    print(f"✅ Train results saved to: {os.path.abspath(args.train_npz_path)}")
+    print("✅ Training completed!\n")
 
 @torch.no_grad()
 def run_eval(args):
@@ -291,6 +190,9 @@ def run_eval(args):
         on_window=args.on_window,
         bs_over_penalty=args.bs_over_penalty
     )
+
+    env.set_hard_constraint(True)
+
     cfg = HeteroQMIXcfg(
         hidden_dim=args.hidden_dim,
         lr = args.lr,
@@ -301,49 +203,56 @@ def run_eval(args):
         seq_len=args.seq_len,
         capacity_episodes=args.capacity_episodes,
         update_interval_steps=args.update_interval_steps,
-        eps_start=0.001,
-        eps_end=0.001,
+        eps_start=args.eval_epsilon,  
+        eps_end=args.eval_epsilon,
         eps_decay=1.0,
     )
+
     agent = HeteroQMIXAgent(env=env, cfg=cfg, device=args.device)
     
-    if args.load_ckpt:
-        if not os.path.exists(args.ckpt_path):
-            raise FileNotFoundError(f"checkpoint not found: {args.ckpt_path}")
-        agent.load(args.ckpt_path)
-        print(f"[EVAL] loaded {args.ckpt_path}")
+    if not os.path.exists(args.ckpt_path):
+        raise FileNotFoundError(f"checkpoint not found: {args.ckpt_path}")
+    
+    agent.load(args.ckpt_path)
+    print(f"[EVAL] loaded model from: {args.ckpt_path}")
     
     agent.eps = args.eval_epsilon
+
     logs = []
-    eval_horizon = 100000
+    eval_horizon = args.eval_steps
+
     print(f"\n[EVAL] episodes={args.episodes} | horizon={eval_horizon} | epsilon={args.eval_epsilon}\n")
 
     for ep_i in range(args.episodes):
         steps_done = 0
-        rollout_idx = 0
+        last_out = None
+
         while steps_done < eval_horizon:
             steps_to_run = min(args.chunk_len, eval_horizon - steps_done)
             out = agent.rollout_episode(n_steps=steps_to_run)
-            
+
             logs.append({
                 "type": "eval",
                 "episode": ep_i,
                 **out
             })
+
             steps_done += int(out.get("ep_len", 0))
-            rollout_idx += 1
-        
-            print(
-                f"  ep={ep_i:03d} | len={out.get('ep_len', 0.0):.0f} "
-                f"| r_ue_sum={out.get('ep_r_ue_sum', float('nan')):.3f} "
-                f"| r_bs_sum={out.get('ep_r_bs_sum', float('nan')):.3f} "
-                f"| epsilon={out.get('epsilon', float('nan')):.3f}"
-                f"| thr_mean={out.get('thr_mean', float('nan')):.3f} "
-                f"| fair_mean={out.get('fair_mean', float('nan')):.3f}"
-                f"| on_ratio={out.get('on_ratio_mean', float('nan')):.3f} "
-            )
-    save_logs_csv(logs, path="./results/eval_logs/eval_log.csv")
-    plot_train_metrics(logs, agent, save_dir="./results/eval_plots", window=50)
+            last_out = out
+
+        print(
+            f"  ep={ep_i:03d} | len={steps_done:.0f} "
+            f"| r_ue_sum={last_out.get('ep_r_ue_sum', float('nan')):.3f} "
+            f"| r_bs_sum={last_out.get('ep_r_bs_sum', float('nan')):.3f} "
+            f"| thr_mean={last_out.get('thr_mean', float('nan')):.3f} "
+            f"| fair_mean={last_out.get('fair_mean', float('nan')):.3f} "
+            f"| on_ratio={last_out.get('on_ratio_mean', float('nan')):.3f}"
+        )
+
+    save_qmix_npz(agent, logs, args.eval_npz_path)
+
+    print(f"\n✅ Eval results saved to: {os.path.abspath(args.eval_npz_path)}")
+    print("✅ Evaluation completed!\n")
     
 
 def main():
@@ -382,14 +291,17 @@ def main():
     parser.add_argument("--eps_end", type=float, default=HeteroQMIXcfg.eps_end)
     parser.add_argument("--eps_decay", type=float, default=HeteroQMIXcfg.eps_decay)
 
-    # ckpt
-    parser.add_argument("--ckpt_path", type=str, default="./checkpoints/heteroqmix_queue.pt")
+    # save paths
+    parser.add_argument("--ckpt_path", type=str, default="./results/QMIX.pt")
+    parser.add_argument("--train_npz_path", type=str, default="./results/npz/QMIX_train.npz")
+    parser.add_argument("--eval_npz_path", type=str, default="./results/npz/QMIX_eval.npz")
     parser.add_argument("--save_ckpt", action="store_true", default=True)
-    parser.add_argument("--load_ckpt", action="store_true", default=True)  
-    
+    parser.add_argument("--load_ckpt", action="store_true", default=True)
+
     # eval
     parser.add_argument("--episodes", type=int, default=1)
-    parser.add_argument("--eval_epsilon", type=float, default=0.001)
+    parser.add_argument("--eval_steps", type=int, default=50000)
+    parser.add_argument("--eval_epsilon", type=float, default=0.2)
 
     args = parser.parse_args()
     set_seed(args.seed)
