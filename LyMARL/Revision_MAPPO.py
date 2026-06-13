@@ -272,7 +272,7 @@ class MAPPOEnvironment:
         alpha3: float = 50.0,
         use_hard_constraint: bool = False,
         use_imperfect_csi:bool=False,
-        csi_noise_std_db: float = 0.0,
+        csi_error_var: float = 0.0,
     ):
         self.base_stations = [bs for bs in base_stations if bs.bs_id != 0]
         self.users = users
@@ -298,7 +298,7 @@ class MAPPOEnvironment:
 
         self.use_hard_constraint = bool(use_hard_constraint)
         self.use_imperfect_csi = bool(use_imperfect_csi)
-        self.csi_noise_std_db = float(csi_noise_std_db)
+        self.csi_error_var = float(csi_error_var)
 
         # Power (Watt)
         self.P_max = {bs.bs_id: 10 ** (bs.tx_power_dbm / 10) / 1000 for bs in self.base_stations}
@@ -383,9 +383,9 @@ class MAPPOEnvironment:
     def set_hard_constraint(self, enabled: bool):
         self.use_hard_constraint = bool(enabled)
 
-    def set_imperfect_csi(self, enabled: bool, noise_std_db: Optional[float] = None):
+    def set_imperfect_csi(self, enabled: bool, error_var: Optional[float] = None):
         self.use_imperfect_csi = bool(enabled)
-        self.csi_noise_std_db = float(noise_std_db) if noise_std_db is not None else self.csi_noise_std_db
+        self.csi_error_var = float(error_var) if error_var is not None else self.csi_error_var
 
     def reset(self):
         self.timestep = 0
@@ -444,13 +444,19 @@ class MAPPOEnvironment:
     # =========================================================
     def _apply_csi_estimation_noise(self, gain: float) -> float:
         gain = max(float(gain), 1e-12)
-        if (not self.use_imperfect_csi) or self.csi_noise_std_db <= 0.0:
+        if (not self.use_imperfect_csi) or self.csi_error_var <= 0.0:
             return gain
 
-        gain_db = 10.0 * np.log10(gain)
-        noisy_gain_db = gain_db + np.random.normal(0.0, self.csi_noise_std_db)
-        return float(10.0 ** (noisy_gain_db / 10.0))
+        h_amp = np.sqrt(gain)
+        sigma = np.sqrt(self.csi_error_var/2.0)
+        e_real = np.random.normal(0.0, sigma)
+        e_imag = np.random.normal(0.0, sigma)
+        
+        h_est = h_amp + e_real + 1j * e_imag
+        noisy_gain = np.abs(h_est) ** 2
 
+        return max(float(noisy_gain), 1e-12)
+    
     def calculate_achievable_rate(self, user_id: int, bs_id: int) -> float:
         """
         Rate used for decision / cache.
@@ -483,6 +489,7 @@ class MAPPOEnvironment:
             other_dist = max(1, other_bs.distance_to(user.position))
             other_rx_dbm = other_bs.receive_power(other_dist)
             other_gain = self.channel_gains.get(user_id, {}).get(other_bs.bs_id, 1.0)
+            other_gain = self._apply_csi_estimation_noise(other_gain)
             other_rx_dbm += 10 * np.log10(other_gain + 1e-12)
             other_rx_watts = 10 ** (other_rx_dbm / 10) / 1000
 
@@ -525,7 +532,6 @@ class MAPPOEnvironment:
             other_dist = max(1, other_bs.distance_to(user.position))
             other_rx_dbm = other_bs.receive_power(other_dist)
             other_gain = self.channel_gains.get(user_id, {}).get(other_bs.bs_id, 1.0)
-            other_gain = self._apply_csi_estimation_noise(other_gain)
             other_rx_dbm += 10 * np.log10(other_gain + 1e-12)
             other_rx_watts = 10 ** (other_rx_dbm / 10) / 1000
 
@@ -804,7 +810,7 @@ class MAPPOEnvironment:
         # Per-user reward for logging
         # This also uses the pre-update queue, i.e., Q_u(t).
         ue_per_user_rewards = {
-            u.ue_id: float(served_rates[u.ue_id] - self.eta_q * old_Q_u[u.ue_id])
+            u.ue_id: float(served_rates[u.ue_id] * old_Q_u[u.ue_id])
             for u in self.users
         }
 
@@ -1530,7 +1536,7 @@ class MAPPOTrainer:
         return results
 
     @torch.no_grad()
-    def evaluate(self, n_steps: int, save_npz_path: Optional[str] = None, imperfect_csi: bool = False, csi_noise_std_db: float = 0.0):
+    def evaluate(self, n_steps: int, save_npz_path: Optional[str] = None, imperfect_csi: bool = False, csi_error_var: float = 0.0):
         print(f"\n{'='*84}")
         print(" EVALUATION (No Learning)")
         print(f"{'='*84}")
@@ -1539,12 +1545,11 @@ class MAPPOTrainer:
 
         self.env.set_imperfect_csi(
             enabled=imperfect_csi,
-            noise_std_db=csi_noise_std_db,
+            error_var=csi_error_var,
         )
 
         print(f"Imperfect CSI during evaluation: {self.env.use_imperfect_csi}")
-        print(f"CSI noise std: {self.env.csi_noise_std_db} dB")
-
+        print(f"CSI error var: {self.env.csi_error_var}")
         self.ue_actor.eval()
         self.bs_actor.eval()
         self.critic_ue.eval()
@@ -1834,8 +1839,9 @@ def plot_training_results(results: Dict, env: MAPPOEnvironment, block_size: int 
 # ============================================================
 
 if __name__ == "__main__":
-    seed = 42
-    set_seed(seed)
+    train_seed = 42
+    eval_seed = 123
+    set_seed(train_seed)
 
     area_size = 100
     num_users = 20
@@ -1886,7 +1892,7 @@ if __name__ == "__main__":
         # Training: soft constraint only
         use_hard_constraint=False,
         use_imperfect_csi=False,
-        csi_noise_std_db=0.0,
+        csi_error_var=0.0,
     )
 
     trainer = MAPPOTrainer(
@@ -1913,40 +1919,52 @@ if __name__ == "__main__":
     train_npz_path = "LyMARL.npz"
     model_path = "LyMARL.pt"
 
-    # train_results = trainer.train(
-    #     n_steps=train_steps,
-    #     update_interval=128,
-    #     save_npz_path=train_npz_path,
-    # )
+    train_results = trainer.train(
+        n_steps=train_steps,
+        update_interval=128,
+        save_npz_path=train_npz_path,
+    )
 
-    # # --------------------------------------------------
-    # # Plot training metrics after training finishes
-    # # --------------------------------------------------
-    # plot_training_results(
-    #     results=train_results,
-    #     env=train_env,
-    #     block_size=100,
-    # )
+    # --------------------------------------------------
+    # Plot training metrics after training finishes
+    # --------------------------------------------------
+    plot_training_results(
+        results=train_results,
+        env=train_env,
+        block_size=100,
+    )
 
-    # trainer.save_model(model_path)
+    trainer.save_model(model_path)
 
-    # print(f"\n✅ Training rewards saved to: {os.path.abspath(train_npz_path)}")
-    # print(f"✅ Model saved to: {os.path.abspath(model_path)}")
+    print(f"\n✅ Training rewards saved to: {os.path.abspath(train_npz_path)}")
+    print(f"✅ Model saved to: {os.path.abspath(model_path)}")
 
     # --------------------------------------------------
     # Enable hard constraint only for evaluation
     # --------------------------------------------------
-    trainer.load_model(model_path)
-    trainer.env.set_hard_constraint(True)
+    # trainer.load_model(model_path)
+    # trainer.env.set_hard_constraint(True)
 
-    eval_npz_path = "LyMARL_eval_imperfect_csi_2db.npz"
+    # set_seed(eval_seed)
+    # eval_npz_path = "LyMARL_eval.npz"
+    # trainer.evaluate(
+    #     n_steps=100000,
+    #     save_npz_path=eval_npz_path,
+    #     imperfect_csi=False,
+    #     csi_error_var=0.0,
+    # )
+    # print(f"✅ Evaluation results saved to: {os.path.abspath(eval_npz_path)}")
 
-    trainer.evaluate(
-        n_steps=100000,
-        save_npz_path=eval_npz_path,
-        imperfect_csi=True,
-        csi_noise_std_db=2.0,
-    )
+    # for csi_error_var in [0.01, 0.05, 0.1]:
+    #     set_seed(eval_seed)
+    #     eval_npz_path = f"LyMARL_eval_imperfect_csi_{csi_error_var}.npz"
 
-    print(f"✅ Evaluation results saved to: {os.path.abspath(eval_npz_path)}")
-    print("\n✅ Completed!\n")
+    #     trainer.evaluate(
+    #         n_steps=100000,
+    #         save_npz_path=eval_npz_path,
+    #         imperfect_csi=True,
+    #         csi_error_var=csi_error_var,
+    #     )
+
+    #     print(f"✅ Evaluation results saved to: {os.path.abspath(eval_npz_path)}")
+    # print("\n✅ Completed!\n")
