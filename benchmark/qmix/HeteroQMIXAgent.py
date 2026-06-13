@@ -195,7 +195,7 @@ class HeteroQMIXAgent:
         # -------------------------------------------------
         running_req_counts = np.zeros(self.N_bs, dtype=np.float32)
         k_cong = 0.0   # 몰림 패널티
-        k_z = 0.01     # Z 큰 BS 회피
+        k_z = 0.0     # Z 큰 BS 회피
         ideal = 1.0 / max(1, self.N_bs)
 
         ue_actions_arr = []
