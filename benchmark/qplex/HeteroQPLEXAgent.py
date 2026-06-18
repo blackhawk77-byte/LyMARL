@@ -453,8 +453,8 @@ class HeteroQPLEXAgent:
                 
                 # online Q at current
                 q_all_t, h = net(obs_t, a_prev_1hot, h)  # (B, A), (B, hidden_dim)
-                # if cur_mask_t is not None:
-                #     q_all_t = apply_mask_q(q_all_t, cur_mask_t)  # (B, A)
+                if cur_mask_t is not None:
+                    q_all_t = apply_mask_q(q_all_t, cur_mask_t)  # (B, A)
                 q_all_online[:, t, i, :] = q_all_t  
 
                 with torch.no_grad():
@@ -469,7 +469,7 @@ class HeteroQPLEXAgent:
                     
                     # target Q -> target eval(ue_tgt)
                     q_next_tgt_all, h_tgt_next = tgt(next_obs_t, a_curr_1hot, h_tgt)  # (B, A), (B, hidden_dim)
-                    # q_next_tgt_all = apply_mask_q(q_next_tgt_all, next_mask_t)  # (B, A)
+                    q_next_tgt_all = apply_mask_q(q_next_tgt_all, next_mask_t)  # (B, A)
                     q_all_tgt_next[:, t, i, :] = q_next_tgt_all  
                     
                     h_tgt = h_tgt_next

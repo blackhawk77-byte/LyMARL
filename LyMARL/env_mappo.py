@@ -117,9 +117,6 @@ class MAPPOEnvironment:
         print(f"{'='*96}")
         print(f"#UE={self.n_agents} | #BS={self.n_bs} | UE_action_dim={self.action_dim} | BS_action_dim={self.bs_action_dim}")
         print(f"V={self.V} | power_budget_ratio={self.power_budget_ratio}")
-        print(f"UE team reward = mean_u[ served_rate_u * Q_u(t+1) ]")
-        print(f"Per-user reward (logging only) = served_rate_u * Q_u(t)")
-        print(f"BS reward = alpha*served_rate - c*max(0, on_ratio-rho)^2")
         print(f"Hard constraint enabled: {self.use_hard_constraint}")
         print(f"local_obs_dim={self.local_obs_dim} | bs_obs_dim={self.bs_obs_dim} | global_obs_dim={self.global_obs_dim}")
         print(f"{'='*96}\n")
@@ -553,15 +550,17 @@ class MAPPOEnvironment:
             served_rate_i = float(bs_served_rate[bs_id])
             P_tx_i = float(self.P_max[bs_id])
 
+            eps_log = 1e-3
+
             if selected_ue is None:
-                r_i = 0.0
+                rate_reward = float(np.log(eps_log))
+                energy_penalty = 0.0
             else:
-                eps_log = 1e-12
                 rate_reward = float(np.log(max(served_rate_i, eps_log)))
                 energy_penalty = P_tx_i * float(old_Z_b[bs_id])
-                r_i = rate_reward - energy_penalty
+
+            r_i = rate_reward - energy_penalty
             
-            # r_i = rate_reward - energy_penalty
             bs_rewards.append(float(r_i))
 
         bs_rewards = np.array(bs_rewards, dtype=np.float32)
