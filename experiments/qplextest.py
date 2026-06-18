@@ -47,18 +47,6 @@ def save_qplex_npz(agent, logs, path: str):
     np.savez(
         path,
 
-        # step-wise histories from agent
-        thr_history=np.asarray(getattr(agent, "thr_history", []), dtype=np.float32),
-        fair_history=np.asarray(getattr(agent, "fair_history_100step", []), dtype=np.float32),
-        on_ratio_history=np.asarray(getattr(agent, "on_ratio_history", []), dtype=np.float32),
-        reward_history_ue=np.asarray(getattr(agent, "reward_history_ue", []), dtype=np.float32),
-        reward_history_bs=np.asarray(getattr(agent, "reward_history_bs", []), dtype=np.float32),
-        step_history=np.asarray(getattr(agent, "step_history", []), dtype=np.int64),
-
-        # rollout/eval summary logs
-        rollout_thr_mean=np.asarray([x.get("thr_mean", np.nan) for x in rollout_logs], dtype=np.float32),
-        rollout_fair_mean=np.asarray([x.get("fair_mean", np.nan) for x in rollout_logs], dtype=np.float32),
-        rollout_on_ratio_mean=np.asarray([x.get("on_ratio_mean", np.nan) for x in rollout_logs], dtype=np.float32),
         rollout_ep_r_ue_sum=np.asarray([x.get("ep_r_ue_sum", np.nan) for x in rollout_logs], dtype=np.float32),
         rollout_ep_r_bs_sum=np.asarray([x.get("ep_r_bs_sum", np.nan) for x in rollout_logs], dtype=np.float32),
         rollout_ep_len=np.asarray([x.get("ep_len", np.nan) for x in rollout_logs], dtype=np.float32),
@@ -75,7 +63,7 @@ def save_qplex_npz(agent, logs, path: str):
 # -------------------------
 def build_env(n_ue: int, n_bs: int, bs_top_k: int, power_budget_ratio: float,
               V: float, enable_mobility: bool, enable_channel_variation: bool,
-              hard_window_len: int, on_window: int, bs_over_penalty: float):
+              hard_window_len: int, on_window: int):
     tri_pos = generate_triangle_coverage()
     bs_pos = list(tri_pos[:min(len(tri_pos), n_bs)])
     if len(bs_pos) < n_bs:
@@ -101,7 +89,6 @@ def build_env(n_ue: int, n_bs: int, bs_top_k: int, power_budget_ratio: float,
         on_window=on_window,
         bs_top_k=bs_top_k,
         hard_window_len=hard_window_len,
-        bs_over_penalty=bs_over_penalty,
     )
     return env
 
@@ -119,7 +106,6 @@ def run_train(args):
         enable_channel_variation=args.enable_channel_variation,
         hard_window_len=args.hard_window_len,
         on_window=args.on_window,
-        bs_over_penalty=args.bs_over_penalty
     )
 
     cfg = HeteroQPLEXcfg(
@@ -152,7 +138,6 @@ def run_train(args):
             "enable_channel_variation": args.enable_channel_variation,
             "hard_window_len": args.hard_window_len,
             "on_window": args.on_window,
-            "bs_over_penalty": args.bs_over_penalty
         },
         "agent": asdict(cfg),
     })
@@ -187,7 +172,6 @@ def run_eval(args):
         enable_channel_variation=args.enable_channel_variation,
         hard_window_len=args.hard_window_len,
         on_window=args.on_window,
-        bs_over_penalty=args.bs_over_penalty
     )
 
     # hard constraint only for evaluation
@@ -219,38 +203,24 @@ def run_eval(args):
     
     agent.eps = args.eval_epsilon
 
-    logs = []
-    eval_horizon = args.eval_steps
+    print(
+        f"\n[EVAL] steps={args.eval_steps} "
+        f"| epsilon={args.eval_epsilon}\n"
+    )
 
-    print(f"\n[EVAL] episodes={args.episodes} | horizon={eval_horizon} | epsilon={args.eval_epsilon}\n")
+    eval_result = agent.evaluate(
+        eval_steps=args.eval_steps,
+        eps_eval=args.eval_epsilon,
+        save_path=args.eval_npz_path,
+    )
 
-    for ep_i in range(args.episodes):
-        steps_done = 0
-        last_out = None
-
-        while steps_done < eval_horizon:
-            steps_to_run = min(args.chunk_len, eval_horizon - steps_done)
-            out = agent.rollout_episode(n_steps=steps_to_run)
-
-            logs.append({
-                "type": "eval",
-                "episode": ep_i,
-                **out
-            })
-
-            steps_done += int(out.get("ep_len", 0))
-            last_out = out
-
-        print(
-            f"  ep={ep_i:03d} | len={steps_done:.0f} "
-            f"| r_ue_sum={last_out.get('ep_r_ue_sum', float('nan')):.3f} "
-            f"| r_bs_sum={last_out.get('ep_r_bs_sum', float('nan')):.3f} "
-            f"| thr_mean={last_out.get('thr_mean', float('nan')):.3f} "
-            f"| fair_mean={last_out.get('fair_mean', float('nan')):.3f} "
-            f"| on_ratio={last_out.get('on_ratio_mean', float('nan')):.3f}"
-        )
-
-    save_qplex_npz(agent, logs, args.eval_npz_path)
+    print(
+        f"[EVAL RESULT] "
+        f"thr_mean={eval_result['throughput_mean']:.4f} "
+        f"| thr_std={eval_result['throughput_std']:.4f} "
+        f"| fairness={eval_result['fairness_mean']:.4f} "
+        f"| on_ratio={eval_result['on_ratio_mean']:.4f}"
+    )
 
     print(f"\n✅ Eval results saved to: {os.path.abspath(args.eval_npz_path)}")
     print("✅ Evaluation completed!\n")
@@ -258,8 +228,8 @@ def run_eval(args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", type=str, choices=["train", "eval"], default="eval")
-    parser.add_argument("--seed", type=int, default=1000)
+    parser.add_argument("--mode", type=str, choices=["train", "eval"], default="train")
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     
     # env
@@ -271,8 +241,7 @@ def main():
     parser.add_argument("--enable_mobility", action="store_true", default=True)
     parser.add_argument("--enable_channel_variation", action="store_true", default=True)
     parser.add_argument("--hard_window_len", type=int, default=10000)
-    parser.add_argument("--on_window", type=int, default=100)
-    parser.add_argument("--bs_over_penalty", type=float, default=100.0)
+    parser.add_argument("--on_window", type=int, default=1000)
     
     # rollout/train
     parser.add_argument("--n_env_steps", type=int, default=50000)
@@ -301,9 +270,8 @@ def main():
     parser.add_argument("--load_ckpt", action="store_true", default=True)
 
     # eval
-    parser.add_argument("--episodes", type=int, default=1)
-    parser.add_argument("--eval_steps", type=int, default=50000)
-    parser.add_argument("--eval_epsilon", type=float, default=0.2)
+    parser.add_argument("--eval_steps", type=int, default=100000)
+    parser.add_argument("--eval_epsilon", type=float, default=0.1)
 
     args = parser.parse_args()
     set_seed(args.seed)

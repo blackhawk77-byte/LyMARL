@@ -262,7 +262,7 @@ class MAPPOEnvironment:
         power_budget_ratio: float = 0.8,
         enable_mobility: bool = True,
         enable_channel_variation: bool = True,
-        on_window: int = 100,
+        on_window: int = 1000,
         bs_top_k: int = 5,
         hard_window_len: int = 10000,
         bs_over_penalty: float = 50.0,
@@ -915,7 +915,8 @@ class MAPPOEnvironment:
         """
         Jain's fairness computed from the most recent up to 100 slots.
         """
-        recent = rate_history if len(rate_history) < 100 else rate_history[-100:]
+        fair_window = 1000
+        recent = rate_history if len(rate_history) < fair_window else rate_history[-fair_window:]
         if not recent:
             return 0.0
 
@@ -1496,25 +1497,27 @@ class MAPPOTrainer:
                         f"C_UE:{losses['critic_ue']:.4f} | C_BS:{losses['critic_bs']:.4f} | "
                         f"Ent(UE):{losses['entropy_ue']:.4f} | Ent(BS):{losses['entropy_bs']:.4f}"
                     )
+            
+            log_window = 1000
 
-            if (step + 1) % 100 == 0:
-                recent_thr = float(np.mean(throughput_history[-100:]))
+            if (step + 1) % log_window == 0:
+                recent_thr = float(np.mean(throughput_history[-log_window:]))
                 recent_fair = float(fairness_history[-1])
-                ue_team_rew_100 = float(np.mean(ue_team_reward_hist[-100:]))
-                bs_team_rew_100 = float(np.mean(bs_reward_mean_hist[-100:]))
+                ue_team_rew_1000 = float(np.mean(ue_team_reward_hist[-log_window:]))
+                bs_team_rew_1000 = float(np.mean(bs_reward_mean_hist[-log_window:]))
                 no_req_cnt = sum(1 for a in ue_actions.values() if int(a) == self.env.no_request_action)
 
                 on_parts = []
                 for bs in self.env.base_stations:
                     hist = list(self.env.bs_on_hist[bs.bs_id])
-                    on_ratio_100 = float(np.mean(hist[-100:])) if len(hist) > 0 else 0.0
-                    on_parts.append(f"BS{bs.bs_id}:{on_ratio_100:.3f}")
+                    on_ratio_1000 = float(np.mean(hist[-log_window:])) if len(hist) > 0 else 0.0
+                    on_parts.append(f"BS{bs.bs_id}:{on_ratio_1000:.3f}")
                 on_str = " ".join(on_parts)
 
                 print(
                     f"Step {step+1:5d} | Thr:{recent_thr:.3f} | Fair:{recent_fair:.3f} | "
-                    f"ON(100): {on_str} | NO-REQ:{no_req_cnt}/{self.env.n_agents} | "
-                    f"UETeamRew(100):{ue_team_rew_100:.3f} | BSTeamRew(100):{bs_team_rew_100:.3f}"
+                    f"ON(1000): {on_str} | NO-REQ:{no_req_cnt}/{self.env.n_agents} | "
+                    f"UETeamRew(1000):{ue_team_rew_1000:.3f} | BSTeamRew(1000):{bs_team_rew_1000:.3f}"
                 )
 
         results = {
@@ -1565,7 +1568,8 @@ class MAPPOTrainer:
         bs_reward_vec_hist = []
         bs_reward_mean_hist = []
 
-        eval_on100_hist = {bs.bs_id: [] for bs in self.env.base_stations}
+        eval_on1000_hist = {bs.bs_id: [] for bs in self.env.base_stations}
+        log_window = 1000
 
         local_obs, global_obs = self.env.reset()
 
@@ -1597,22 +1601,22 @@ class MAPPOTrainer:
 
             local_obs, global_obs = next_local_obs, next_global_obs
 
-            if (step + 1) % 100 == 0:
-                recent_thr = float(np.mean(throughput_history[-100:]))
+            if (step + 1) % log_window == 0:
+                recent_thr = float(np.mean(throughput_history[-log_window:]))
                 recent_fair = float(fairness_history[-1])
                 no_req_cnt = sum(1 for a in ue_actions.values() if int(a) == self.env.no_request_action)
 
                 on_parts = []
                 for bs in self.env.base_stations:
                     hist = list(self.env.bs_on_hist[bs.bs_id])
-                    on_ratio_100 = float(np.mean(hist[-100:])) if len(hist) > 0 else 0.0
-                    eval_on100_hist[bs.bs_id].append(on_ratio_100)
-                    on_parts.append(f"BS{bs.bs_id}:{on_ratio_100:.3f}")
+                    on_ratio_1000 = float(np.mean(hist[-log_window:])) if len(hist) > 0 else 0.0
+                    eval_on1000_hist[bs.bs_id].append(on_ratio_1000)
+                    on_parts.append(f"BS{bs.bs_id}:{on_ratio_1000:.3f}")
                 on_str = " ".join(on_parts)
 
                 print(
                     f"[EVAL] Step {step+1:5d} | Thr:{recent_thr:.3f} | Fair:{recent_fair:.3f} | "
-                    f"ON(100): {on_str} | NO-REQ:{no_req_cnt}/{self.env.n_agents}"
+                    f"ON(1000): {on_str} | NO-REQ:{no_req_cnt}/{self.env.n_agents}"
                 )
 
             if (step + 1) % 10000 == 0:
@@ -1620,17 +1624,17 @@ class MAPPOTrainer:
                 fair_10k_mean = float(np.mean(fairness_history[-10000:]))
 
                 on10k_parts = []
-                n_blocks_10k = max(1, 10000 // 100)
+                n_blocks_10k = max(1, 10000 // log_window)
                 for bs in self.env.base_stations:
-                    recent_on100 = eval_on100_hist[bs.bs_id][-n_blocks_10k:]
-                    on10k_mean = float(np.mean(recent_on100)) if len(recent_on100) > 0 else 0.0
+                    recent_on1000 = eval_on1000_hist[bs.bs_id][-n_blocks_10k:]
+                    on10k_mean = float(np.mean(recent_on1000)) if len(recent_on1000) > 0 else 0.0
                     on10k_parts.append(f"BS{bs.bs_id}:{on10k_mean:.3f}")
                 on10k_str = " ".join(on10k_parts)
 
                 print(
                     f"[EVAL-10K] Step {step+1:5d} | "
                     f"ThroughputMean(10k):{thr_10k_mean:.3f} | "
-                    f"Mean(step-wise Fair(100) over 10k):{fair_10k_mean:.3f} | "
+                    f"Mean(step-wise Fair(1000) over 10k):{fair_10k_mean:.3f} | "
                     f"ON100-Mean(10k): {on10k_str}"
                 )
 
@@ -1874,7 +1878,7 @@ if __name__ == "__main__":
         power_budget_ratio=0.6,
         enable_mobility=True,
         enable_channel_variation=True,
-        on_window=100,
+        on_window=1000,
         bs_top_k=5,
         hard_window_len=10000,
 
@@ -1942,29 +1946,29 @@ if __name__ == "__main__":
     # --------------------------------------------------
     # Enable hard constraint only for evaluation
     # --------------------------------------------------
-    # trainer.load_model(model_path)
-    # trainer.env.set_hard_constraint(True)
+    trainer.load_model(model_path)
+    trainer.env.set_hard_constraint(True)
 
-    # set_seed(eval_seed)
-    # eval_npz_path = "LyMARL_eval.npz"
-    # trainer.evaluate(
-    #     n_steps=100000,
-    #     save_npz_path=eval_npz_path,
-    #     imperfect_csi=False,
-    #     csi_error_var=0.0,
-    # )
-    # print(f"✅ Evaluation results saved to: {os.path.abspath(eval_npz_path)}")
+    set_seed(eval_seed)
+    eval_npz_path = "LyMARL_eval.npz"
+    trainer.evaluate(
+        n_steps=100000,
+        save_npz_path=eval_npz_path,
+        imperfect_csi=False,
+        csi_error_var=0.0,
+    )
+    print(f"✅ Evaluation results saved to: {os.path.abspath(eval_npz_path)}")
 
-    # for csi_error_var in [0.01, 0.05, 0.1]:
-    #     set_seed(eval_seed)
-    #     eval_npz_path = f"LyMARL_eval_imperfect_csi_{csi_error_var}.npz"
+    for csi_error_var in [0.01, 0.05, 0.1]:
+        set_seed(eval_seed)
+        eval_npz_path = f"LyMARL_eval_imperfect_csi_{csi_error_var}.npz"
 
-    #     trainer.evaluate(
-    #         n_steps=100000,
-    #         save_npz_path=eval_npz_path,
-    #         imperfect_csi=True,
-    #         csi_error_var=csi_error_var,
-    #     )
+        trainer.evaluate(
+            n_steps=100000,
+            save_npz_path=eval_npz_path,
+            imperfect_csi=True,
+            csi_error_var=csi_error_var,
+        )
 
-    #     print(f"✅ Evaluation results saved to: {os.path.abspath(eval_npz_path)}")
-    # print("\n✅ Completed!\n")
+        print(f"✅ Evaluation results saved to: {os.path.abspath(eval_npz_path)}")
+    print("\n✅ Completed!\n")

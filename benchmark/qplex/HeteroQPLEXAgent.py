@@ -1,4 +1,7 @@
-#HeteroQPLEXAgent.py
+'''
+학습 전용, eval은 alternative_marl_comparison.py로
+HeteroQPLEXAgent.py
+'''
 from dataclasses import dataclass
 from tqdm import tqdm
 from typing import Dict, List, Optional
@@ -121,13 +124,6 @@ class HeteroQPLEXAgent:
         self._cur_global_obs = None
         self._need_env_reset = True
 
-        self.reward_history_ue = []
-        self.reward_history_bs = []
-        self.thr_history = []
-        self.fair_history_100step = []
-        self.on_ratio_history = []
-        self.step_history=[]
-
         self.ue_vnorm = ValueNorm(eps=1e-5, device=self.device)
         self.bs_vnorm = ValueNorm(eps=1e-5, device=self.device)
     
@@ -140,7 +136,7 @@ class HeteroQPLEXAgent:
         self._ue_last_a = torch.zeros((self.N_ue, self.ue_act_dim), device=self.device)
         self._bs_last_a = torch.zeros((self.N_bs, self.bs_act_dim), device=self.device)
 
-    def jain_fairness(self, rate_history, window: int = 100, eps: float = 1e-12) -> float:
+    def jain_fairness(self, rate_history, window: int = 1000, eps: float = 1e-12) -> float:
         recent = rate_history if len(rate_history) < window else rate_history[-window:]
         if len(recent) == 0:
             return 0.0
@@ -266,11 +262,6 @@ class HeteroQPLEXAgent:
         self._maybe_reset_env()
         local_obs, global_obs = self._cur_local_obs, self._cur_global_obs
 
-        thr_sum = 0.0
-        thr_last = 0.0
-        rate_history = []
-        recent_on_hist = []
-
         # UE trajectory
         ue_lo, ue_s, ue_a, ue_rtot, ue_nlo, ue_ns, ue_done = [], [], [], [], [], [], []
         ue_mask, ue_next_mask = [], []
@@ -283,8 +274,6 @@ class HeteroQPLEXAgent:
         ep_r_bs = 0.0 
         done_flag = False
 
-        reward_ue_hist, reward_bs_hist = [], []
-
         for _ in range(n_steps):
             (ue_actions, ue_actions_arr, ue_obs_batch, ue_masks_batch,
             bs_actions, bs_actions_arr, bs_obs_batch, bs_masks_batch, cand_lists) = self.select_actions(local_obs, global_obs)
@@ -294,60 +283,17 @@ class HeteroQPLEXAgent:
                 bs_actions=bs_actions, 
                 cand_lists=cand_lists
             )
-            # =========================
-            # Throughput / Fairness stats
-            # =========================
-            thr_last = float(info.get("total_throughput", 0.0))
-            thr_sum += thr_last
-            self.thr_history.append(thr_last)
-
-            served_rates = info.get("served_rates", None)  # dict {ue_id: rate}
-            if served_rates is not None:
-                step_rates = np.zeros(self.N_ue, dtype=np.float64)
-                for ue_id, r in served_rates.items():
-                    idx = int(ue_id) - 1
-                    if 0 <= idx < self.N_ue:
-                        step_rates[idx] = float(r)
-                rate_history.append(step_rates)
-                fair_t = self.jain_fairness(rate_history, window=100)
-                self.fair_history_100step.append(fair_t)
-            
-            # =========================
-            # On-ratio stats
-            # =========================
-            power_consumed = info.get("power_consumed", None)  # dict {bs_id: power}
-
-            if power_consumed is not None:
-                on_now = np.array(
-                    [1.0 if float(power_consumed[b.bs_id]) > 0.0 else 0.0 for b in self.base_stations], 
-                    dtype=np.float64)
-                recent_on_hist.append(float(np.mean(on_now)))
-                on_ratio_100 = float(np.mean(recent_on_hist[-100:]))
-                self.on_ratio_history.append(on_ratio_100)
-            else:
-                on_feats = info.get("on_feats", None)  # dict {bs_id: on_feat}
-                if on_feats is not None:
-                    if isinstance(on_feats, dict):
-                        vals = np.asarray(list(on_feats.values()), dtype=np.float64)
-                    else:
-                        vals = np.asarray(on_feats, dtype=np.float64)
-                    recent_on_hist.append(float(np.mean(vals)))
-                    on_ratio_100 = float(np.mean(recent_on_hist[-100:]))
-                    self.on_ratio_history.append(on_ratio_100)
-                else:
-                    self.on_ratio_history.append(float("nan"))
                 
             # reward
             rew_ue = float(info['ue_team_reward'])
             rew_bs = float(info['bs_team_reward'])
             ep_r_ue += rew_ue
             ep_r_bs += rew_bs
-            reward_ue_hist.append(rew_ue)
-            reward_bs_hist.append(rew_bs)
 
             # ---- next obs for UE ----
             ue_next_obs_batch = np.stack([next_local_obs[u.ue_id] for u in self.users], axis=0).astype(np.float32)  # (N_ue, obs_dim)
             ue_next_mask_batch = np.stack([self.env._get_action_mask(u.ue_id) for u in self.users], axis=0).astype(np.bool_)  # (N_ue, act_dim)
+            
             # ---- next obs for BS ----
             (next_ue_actions, _, _, _, _, _, _, _, _) = self.select_actions(next_local_obs, next_global_obs, update_rnn_state=False, eps_override=0.0)
             bs_next_obs_batch, bs_next_mask_batch, _ = self.env.build_bs_decision_inputs(next_ue_actions)
@@ -379,9 +325,6 @@ class HeteroQPLEXAgent:
             bs_next_mask.append(torch.tensor(bs_next_mask_batch, dtype=torch.bool, device="cpu"))
 
             local_obs, global_obs = next_local_obs, next_global_obs
-            self.reward_history_ue.append(rew_ue)
-            self.reward_history_bs.append(rew_bs)
-            self.step_history.append(self.total_env_steps)
             self.total_env_steps += 1
 
             Q_u = info.get("Q_u", None)
@@ -459,21 +402,10 @@ class HeteroQPLEXAgent:
             self._need_env_reset = True
             self._cur_local_obs, self._cur_global_obs = None, None
 
-        thr_mean = thr_sum / max(1, T)
-        fair_mean = float(self.fair_history_100step[-1]) if len(self.fair_history_100step) > 0 else float("nan")
-        on_ratio_mean = float(self.on_ratio_history[-1]) if len(self.on_ratio_history) > 0 else float("nan")
-
         return {"ep_len": float(T),
-                "thr_sum": float(thr_sum),
-                "thr_mean": float(thr_mean),
-                "thr_last": float(thr_last),
-                "fair_mean": float(fair_mean),              # 에피소드 누적 rate 기준 Jain
-                "on_ratio_mean": float(on_ratio_mean),
                 "ep_r_ue_sum": float(ep_r_ue),
                 "ep_r_bs_sum": float(ep_r_bs),
                 "epsilon": float(self.eps),
-                "reward_ue_hist": reward_ue_hist,
-                "reward_bs_hist": reward_bs_hist
             }  
     
     # -------------------------
@@ -521,22 +453,25 @@ class HeteroQPLEXAgent:
                 
                 # online Q at current
                 q_all_t, h = net(obs_t, a_prev_1hot, h)  # (B, A), (B, hidden_dim)
-                if cur_mask_t is not None:
-                    q_all_t = apply_mask_q(q_all_t, cur_mask_t)  # (B, A)
-                q_all_online[:, t, i, :] = q_all_t  # save for online action
+                # if cur_mask_t is not None:
+                #     q_all_t = apply_mask_q(q_all_t, cur_mask_t)  # (B, A)
+                q_all_online[:, t, i, :] = q_all_t  
 
                 with torch.no_grad():
                     _, h_tgt = tgt(obs_t, a_prev_1hot, h_tgt)  # (B, A), (B, hidden_dim)
                     a_curr_1hot = one_hot(act_t, act_dim)  # (B, A)
                     # next action selection -> online argmax(net)
                     q_next_online_all, _ = net(next_obs_t, a_curr_1hot, h.detach())  # (B, A), (B, hidden_dim)
+                    
                     q_next_online_all = apply_mask_q(q_next_online_all, next_mask_t)  # (B, A)
                     next_a = q_next_online_all.argmax(dim=-1)         
                     next_a_star[:, t, i] = next_a 
+                    
                     # target Q -> target eval(ue_tgt)
                     q_next_tgt_all, h_tgt_next = tgt(next_obs_t, a_curr_1hot, h_tgt)  # (B, A), (B, hidden_dim)
-                    q_next_tgt_all = apply_mask_q(q_next_tgt_all, next_mask_t)  # (B, A)
+                    # q_next_tgt_all = apply_mask_q(q_next_tgt_all, next_mask_t)  # (B, A)
                     q_all_tgt_next[:, t, i, :] = q_next_tgt_all  
+                    
                     h_tgt = h_tgt_next
 
         # Qtot online & target
@@ -623,6 +558,97 @@ class HeteroQPLEXAgent:
                                     })
         pbar.close()
         return logs
+    
+    @torch.no_grad()
+    def evaluate(self, eval_steps: int = 10000, eps_eval: float = 0.0, save_path: Optional[str] = None) -> Dict[str, float]:
+        was_training = self.ue_net.training
+        self.ue_net.eval()
+        self.bs_net.eval()
+        self.ue_duplex.eval()
+        self.bs_duplex.eval()
+
+        local_obs, global_obs = self.env.reset()
+        self._reset_rollout_rnn_state()
+
+        throughput_hist = []
+        fairness_hist = []
+        on_ratio_hist = []
+        rate_hist = []
+
+        for _ in range(eval_steps):
+            (ue_actions, ue_actions_arr, ue_obs_batch, ue_masks_batch,
+                bs_actions, bs_actions_arr, bs_obs_batch, bs_masks_batch, cand_lists) = self.select_actions(local_obs, global_obs, update_rnn_state=True, eps_override=eps_eval)
+
+            next_local_obs, next_global_obs, info, done = self.env.step_joint(
+                ue_actions=ue_actions,
+                bs_actions=bs_actions,
+                cand_lists=cand_lists
+            )
+
+            throughput_hist.append(float(info.get("total_throughput", 0.0)))
+            served_rates = info.get("served_rates", None)
+            if served_rates is not None:
+                step_rates = np.zeros(self.N_ue, dtype=np.float32)
+                for ue_id, r in served_rates.items():
+                    idx = int(ue_id) - 1
+                    if 0 <= idx < self.N_ue:
+                        step_rates[idx] = float(r)
+                rate_hist.append(step_rates)
+                fairness_hist.append(self.jain_fairness(rate_hist, window=1000))
+            else:
+                fairness_hist.append(float('nan'))
+
+            power_consumed = info.get("power_consumed", None)
+            if power_consumed is not None:
+                on_now = np.array([1.0 if power_consumed.get(b.bs_id, 0.0) > 0.0 else 0.0 for b in self.base_stations], dtype=np.float32)
+                on_ratio_hist.append(float(np.mean(on_now)))
+            else:
+                on_feats = info.get("on_feats", None)
+                if on_feats is not None:
+                    if isinstance(on_feats, dict):
+                        vals = np.asarray(list(on_feats.values()), dtype=np.float64)
+                    else:
+                        vals = np.asarray(on_feats, dtype=np.float64)
+                    on_ratio_hist.append(float(np.mean(vals)))
+                else:
+                    on_ratio_hist.append(float("nan"))
+
+            local_obs, global_obs = next_local_obs, next_global_obs
+
+            if done:
+                local_obs, global_obs = self.env.reset()
+                self._reset_rollout_rnn_state()
+
+        throughput_arr = np.asarray(throughput_hist, dtype=np.float64)
+        fairness_arr = np.asarray(fairness_hist, dtype=np.float64)
+        on_ratio_arr = np.asarray(on_ratio_hist, dtype=np.float64)
+
+        results = {
+            "eval_steps": float(eval_steps),
+            "eps_eval": float(eps_eval),
+            "throughput_mean": float(np.nanmean(throughput_arr)),
+            "throughput_std": float(np.nanstd(throughput_arr)),
+            "fairness_mean": float(np.nanmean(fairness_arr)),
+            "on_ratio_mean": float(np.nanmean(on_ratio_arr)),
+        }
+
+        if save_path is not None:
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            np.savez(
+                save_path,
+                throughput=throughput_arr,
+                fairness=fairness_arr,
+                on_ratio=on_ratio_arr,
+                **results,
+            )
+
+        if was_training:
+            self.ue_net.train()
+            self.bs_net.train()
+            self.ue_duplex.train()
+            self.bs_duplex.train()
+
+        return results
     
     def save(self, path: str):
         os.makedirs(os.path.dirname(path), exist_ok=True)

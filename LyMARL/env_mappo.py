@@ -21,10 +21,9 @@ class MAPPOEnvironment:
         power_budget_ratio: float = 0.6,
         enable_mobility: bool = True,
         enable_channel_variation: bool = True,
-        on_window: int = 100,
+        on_window: int = 1000,
         bs_top_k: int = 5,
         hard_window_len: int = 10000,
-        bs_over_penalty: float = 50.0,
         use_hard_constraint: bool = False,
     ):
         self.base_stations = [bs for bs in base_stations if bs.bs_id != 0]
@@ -36,8 +35,6 @@ class MAPPOEnvironment:
         self.power_budget_ratio = float(power_budget_ratio)
         self.enable_mobility = bool(enable_mobility)
         self.enable_channel_variation = bool(enable_channel_variation)
-
-        self.bs_over_penalty = float(bs_over_penalty)
 
         self.bs_top_k = int(bs_top_k)
         assert self.bs_top_k >= 1
@@ -119,7 +116,7 @@ class MAPPOEnvironment:
         print(" MAPPO Environment")
         print(f"{'='*96}")
         print(f"#UE={self.n_agents} | #BS={self.n_bs} | UE_action_dim={self.action_dim} | BS_action_dim={self.bs_action_dim}")
-        print(f"V={self.V} | power_budget_ratio={self.power_budget_ratio} | bs_over_penalty={self.bs_over_penalty}")
+        print(f"V={self.V} | power_budget_ratio={self.power_budget_ratio}")
         print(f"UE team reward = mean_u[ served_rate_u * Q_u(t+1) ]")
         print(f"Per-user reward (logging only) = served_rate_u * Q_u(t)")
         print(f"BS reward = alpha*served_rate - c*max(0, on_ratio-rho)^2")
@@ -555,18 +552,14 @@ class MAPPOEnvironment:
 
             served_rate_i = float(bs_served_rate[bs_id])
             P_tx_i = float(self.P_max[bs_id])
-            Z_b_i = float(old_Z_b[bs_id])
 
             if selected_ue is None:
-                # rate_reward = 0.0
-                # energy_penalty = 0.0
                 r_i = 0.0
             else:
-                # eps_log = 1e-12
-                # rate_reward = float(np.log(max(served_rate_i, eps_log)))
-                # energy_penalty = P_tx_i * float(old_Z_b[bs_id])
-                Q_u_i = float(old_Q_u[selected_ue])
-                r_i = Q_u_i * served_rate_i - Z_b_i * P_tx_i
+                eps_log = 1e-12
+                rate_reward = float(np.log(max(served_rate_i, eps_log)))
+                energy_penalty = P_tx_i * float(old_Z_b[bs_id])
+                r_i = rate_reward - energy_penalty
             
             # r_i = rate_reward - energy_penalty
             bs_rewards.append(float(r_i))
@@ -621,7 +614,9 @@ class MAPPOEnvironment:
         """
         Jain's fairness computed from the most recent up to 100 slots.
         """
-        recent = rate_history if len(rate_history) < 100 else rate_history[-100:]
+        fair_window = 1000
+        recent = rate_history if len(rate_history) < fair_window else rate_history[-fair_window:]
+        
         if not recent:
             return 0.0
 
